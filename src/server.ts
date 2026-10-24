@@ -16,6 +16,7 @@ import {
   normalizePhone,
   profilePayload,
 } from "./store.js";
+import { createCheckout, paymentsEnabled, syncPayment, verifyCallbackSignature } from "./payments.js";
 
 const app = express();
 app.set("trust proxy", true);
@@ -36,7 +37,7 @@ app.get("/api/config", (_req, res) =>
   res.json({
     voiceNumber: process.env.VOICE_NUMBER || null,
     whatsappLink: process.env.WHATSAPP_LINK || null,
-    paymentsEnabled: !!process.env.PINELABS_CLIENT_ID,
+    paymentsEnabled: paymentsEnabled(),
     mentorPricePaise: 4900,
   }),
 );
@@ -141,6 +142,45 @@ app.post(
     if (!l) return;
     await endSession(l.id, "web");
     res.json(await chatTurn(l, null));
+  }),
+);
+
+// ---------- Payments (Pine Labs hosted checkout) ----------
+
+app.post(
+  "/api/pay/mentor-review",
+  wrap(async (req, res) => {
+    const l = await requireLearner(req, res);
+    if (!l) return;
+    if (!paymentsEnabled()) return res.status(503).json({ error: "Payments are not switched on yet." });
+    res.json({ redirect_url: await createCheckout(l, "mentor_review") });
+  }),
+);
+
+// Pine Labs sends the shopper back here after checkout. Docs don't pin GET vs POST, so accept both.
+app.all(
+  "/pay/callback",
+  wrap(async (req, res) => {
+    const params: Record<string, string> = {};
+    for (const [k, v] of Object.entries({ ...req.query, ...(req.body ?? {}) })) if (typeof v === "string") params[k] = v;
+    const ref = params.ref ?? "";
+    const sig = verifyCallbackSignature(params, process.env.PINELABS_SECRET_KEY || process.env.PINELABS_CLIENT_SECRET);
+    await logEvent("payment.callback", { ref, method: req.method, order_id: params.order_id, status: params.status, error_code: params.error_code, signature_check: sig });
+    const r = ref ? await syncPayment(ref, "callback") : null;
+    res.redirect(303, `/me?payment=${encodeURIComponent(r?.status ?? "UNKNOWN")}`);
+  }),
+);
+
+// Webhook payload/signature format isn't documented on the pages we read, so we treat it
+// only as a trigger and re-read the order from Pine Labs' API before changing anything.
+app.post(
+  "/webhooks/pinelabs",
+  wrap(async (req, res) => {
+    const b = req.body ?? {};
+    const ref = b.data?.merchant_order_reference ?? b.merchant_order_reference ?? null;
+    await logEvent("payment.webhook", { event_type: b.event_type ?? b.type ?? null, ref, order_id: b.data?.order_id ?? b.order_id ?? null });
+    if (ref) await syncPayment(String(ref), "webhook");
+    res.json({ received: true });
   }),
 );
 
@@ -312,6 +352,14 @@ app.get(
   requireAdmin,
   wrap(async (req, res) => {
     res.json(await one("select * from sessions where id=$1", [Number(req.params.id)]));
+  }),
+);
+
+app.post(
+  "/api/admin/payments/:ref/sync",
+  requireAdmin,
+  wrap(async (req, res) => {
+    res.json(await syncPayment(String(req.params.ref), "admin"));
   }),
 );
 

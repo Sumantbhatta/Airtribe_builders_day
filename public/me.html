@@ -97,6 +97,8 @@ fetch('/api/config').then(r=>r.json()).then(c=>{
 $('pay').onclick=async()=>{ $('payerr').textContent='';
   const r=await fetch('/api/pay/mentor-review',{method:'POST',headers:H}); const j=await r.json();
   if(!r.ok||!j.redirect_url){$('payerr').textContent=j.error||'Payment could not start';return;} location.href=j.redirect_url; };
+const pq=new URLSearchParams(location.search).get('payment');
+if(pq){$('payerr').textContent=pq==='SUCCESS'?'':'Payment status: '+pq;if(pq==='SUCCESS'){$('paylist').insertAdjacentHTML('beforebegin','<p><b>✅ Payment received.</b> A mentor will review your session; feedback appears here.</p>');}history.replaceState(null,'','/me');}
 loadProfile(); chat(null);
 </script>
 </body></html>
