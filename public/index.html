@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CallMentor</title><link rel="stylesheet" href="/style.css">
+<meta name="description" content="Stuck learning Java? Call, talk, and get unstuck in five minutes.">
+</head><body><div class="wrap">
+<header class="top"><div class="brand">CallMentor</div><a href="#join" class="small">Join</a></header>
+
+<h1>Stuck learning Java?<br>Just call.</h1>
+<p class="lead">No app, no forms, no resume. Talk to an AI companion for five minutes. It finds the <b>one</b> thing you're stuck on, explains it with an analogy, checks it stuck, and tells you exactly what to do next.</p>
+<div class="loop"><span>Discover</span><span>Diagnose</span><span>Teach</span><span>Retest</span><span>Update profile</span><span>Next step</span></div>
+
+<div class="grid">
+  <div class="card">
+    <h2>📞 Call</h2>
+    <div class="callbox" id="num">Number coming soon</div>
+    <p class="muted small">Sign up first with the number you'll call from, and your progress shows up on your profile page.</p>
+  </div>
+  <div class="card" id="wa-card" hidden>
+    <h2>💬 WhatsApp</h2>
+    <p>Prefer to type or send voice notes?</p>
+    <a class="btn secondary" id="wa" href="#">Message us on WhatsApp</a>
+  </div>
+  <div class="card">
+    <h2>⌨️ Type instead</h2>
+    <p>Same companion, in text. Sign up below and you'll go straight to the chat.</p>
+  </div>
+</div>
+
+<div class="card" id="join" style="margin-top:24px;max-width:520px">
+  <h2>Join in 30 seconds</h2>
+  <form id="f">
+    <label for="name">Your name</label><input id="name" name="name" type="text" required autocomplete="name">
+    <label for="phone">Phone number</label><input id="phone" name="phone" type="tel" required placeholder="98765 43210" autocomplete="tel">
+    <label class="check"><input type="checkbox" name="consent" id="consent"> <span>I agree that CallMentor can store my answers and progress to help me learn, and may contact me about my progress. I can ask for deletion anytime.</span></label>
+    <div class="err" id="err"></div>
+    <button class="btn" type="submit">Start learning</button>
+  </form>
+</div>
+
+<p class="muted small" style="margin-top:32px">Built today at Airtribe AI Builders Day. Payments by Pine Labs (test mode).</p>
+</div>
+<script>
+fetch('/api/config').then(r=>r.json()).then(c=>{
+  if(c.voiceNumber){const n=document.getElementById('num');n.innerHTML='<a href="tel:'+c.voiceNumber.replace(/\s/g,'')+'">'+c.voiceNumber+'</a>';}
+  if(c.whatsappLink){document.getElementById('wa').href=c.whatsappLink;document.getElementById('wa-card').hidden=false;}
+});
+const params=new URLSearchParams(location.search);
+document.getElementById('f').addEventListener('submit',async e=>{
+  e.preventDefault();
+  const err=document.getElementById('err');err.textContent='';
+  const body={name:name.value,phone:phone.value,consent:consent.checked,source:params.get('src')||'web',test:params.get('test')==='1'};
+  const r=await fetch('/api/signup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(!r.ok){err.textContent=j.error||'Something went wrong';return;}
+  try{localStorage.setItem('cm_token',j.token)}catch{}
+  location.href='/me#'+j.token;
+});
+</script>
+</body></html>

@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: callmentor
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: callmentor-db
+          property: connectionString
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: TOOL_SECRET
+        generateValue: true
+      - key: PUBLIC_BASE_URL
+        sync: false
+      - key: VOICE_NUMBER
+        sync: false
+      - key: WHATSAPP_LINK
+        sync: false
+      - key: PINELABS_CLIENT_ID
+        sync: false
+      - key: PINELABS_CLIENT_SECRET
+        sync: false
+      - key: PINELABS_MID
+        sync: false
+      - key: PINELABS_BASE_URL
+        sync: false
+databases:
+  - name: callmentor-db
+    plan: free

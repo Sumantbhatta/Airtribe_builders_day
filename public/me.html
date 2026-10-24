@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My Progress</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="wrap">
+<header class="top"><a class="brand" href="/" style="color:inherit;text-decoration:none">CallMentor</a><span class="muted small" id="hello"></span></header>
+
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start">
+  <div class="card chat">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Talk it through</h2><button class="btn secondary small" id="reset" style="padding:6px 10px">New session</button></div>
+    <div class="msgs" id="msgs" aria-live="polite"></div>
+    <form class="composer" id="cf"><input id="m" type="text" autocomplete="off" placeholder="Type your answer…" aria-label="Your message"><button class="btn" type="submit">Send</button></form>
+  </div>
+
+  <div>
+    <div class="card" id="call-card" hidden><h2>📞 Or call</h2><div class="callbox" id="num"></div><p class="muted small">Call from the number you signed up with and it lands on this same profile.</p></div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>What we know</h2>
+      <p class="muted small">✅ <b>Demonstrated</b> = you showed it in an answer. 💭 <b>Inferred</b> = from what you told us, not yet checked. Wrong? Fix it.</p>
+      <div id="facts" class="muted">Nothing yet. Start the chat.</div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Before → after</h2>
+      <div id="outcomes" class="muted">No sessions finished yet.</div>
+    </div>
+
+    <div class="card" style="margin-top:16px" id="mentor-card">
+      <h2>Human mentor review · ₹49</h2>
+      <p class="small">A human mentor reads your session, checks the AI's diagnosis, and sends you personal written feedback and a practice plan.</p>
+      <div id="mentor-feedback"></div>
+      <button class="btn" id="pay" disabled>Payments coming soon</button>
+      <div class="err" id="payerr"></div>
+      <div id="paylist" class="small muted"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <details><summary>Your details</summary>
+        <form id="pf">
+          <label for="p-name">Name</label><input id="p-name" type="text">
+          <label for="p-goal">What you're learning</label><input id="p-goal" type="text">
+          <label for="p-mot">Why</label><input id="p-mot" type="text">
+          <label for="p-str">What feels hard</label><input id="p-str" type="text">
+          <p><button class="btn secondary" type="submit">Save</button> <span id="saved" class="muted small"></span></p>
+        </form>
+      </details>
+    </div>
+  </div>
+</div>
+</div>
+<script>
+let token=location.hash.slice(1);
+try{ if(token) localStorage.setItem('cm_token',token); else token=localStorage.getItem('cm_token')||''; }catch{}
+if(!token){location.href='/#join'}
+const H={'content-type':'application/json','x-learner-token':token};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=t=>new Date(t).toLocaleString();
+
+function add(role,text){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');d.textContent=text;$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
+async function chat(message){
+  const r=await fetch('/api/chat',{method:'POST',headers:H,body:JSON.stringify({message})});
+  const j=await r.json(); if(!r.ok){add('c',j.error||'Error');return;}
+  j.replies.forEach(t=>add('c',t)); if(j.stage==='DONE'||message) loadProfile();
+}
+$('cf').addEventListener('submit',e=>{e.preventDefault();const v=$('m').value.trim();if(!v)return;add('l',v);$('m').value='';chat(v);});
+$('reset').onclick=async()=>{$('msgs').innerHTML='';const r=await fetch('/api/chat/reset',{method:'POST',headers:H});const j=await r.json();j.replies.forEach(t=>add('c',t));};
+
+async function loadProfile(){
+  const r=await fetch('/api/me',{headers:H}); if(r.status===401){try{localStorage.removeItem('cm_token')}catch{};location.href='/#join';return;}
+  const p=await r.json(); const L=p.learner;
+  $('hello').textContent='Hi, '+L.name;
+  if(!document.activeElement||document.activeElement.closest('#pf')===null){
+    $('p-name').value=L.name||'';$('p-goal').value=L.goal||'';$('p-mot').value=L.motivation||'';$('p-str').value=L.struggle||'';
+  }
+  $('facts').innerHTML=p.facts.length?p.facts.map(f=>`<div class="fact"><span class="pill ${esc(f.status)}">${f.status==='demonstrated'?'✅ knows it':f.status==='gap'?'⚠️ gap':f.status==='removed'?'removed':'💭 maybe a gap'}</span>
+    <span class="muted small">${f.kind==='inferred'?'inferred':'demonstrated'}${f.source==='learner'?' · corrected by you':''}</span><br><b>${esc(f.concept_name)}</b>
+    <div class="small muted">${esc(f.evidence)}</div>${f.learner_note?`<div class="small">Your note: ${esc(f.learner_note)}</div>`:''}
+    ${f.status==='gap'&&f.lesson?`<details class="small"><summary>Re-read the lesson</summary>${esc(f.lesson)}</details>`:''}
+    <div class="small" style="margin-top:4px">Not right? <a href="#" data-f="${f.id}" data-s="demonstrated">I know this</a> · <a href="#" data-f="${f.id}" data-s="gap">I'm stuck on this</a> · <a href="#" data-f="${f.id}" data-s="removed">Remove</a></div></div>`).join(''):'Nothing yet. Start the chat.';
+  $('outcomes').innerHTML=p.outcomes.length?p.outcomes.map(o=>`<div class="fact"><b>${o.gap_concept?esc(o.concept_name):'No gap found'}</b> <span class="muted small">${esc(o.channel||'')} · ${fmt(o.created_at)}</span>
+    ${o.gap_concept?`<div>Before lesson: ❌ → After: ${o.after_correct?'✅':'❌'}</div>`:''}<div class="small"><b>Next step:</b> ${esc(o.next_step)}</div></div>`).join(''):'No sessions finished yet.';
+  $('mentor-feedback').innerHTML=p.mentor_feedback.map(m=>`<div class="fact"><b>Mentor feedback</b> <span class="muted small">${fmt(m.decided_at)}</span><div style="white-space:pre-wrap">${esc(m.final_text)}</div></div>`).join('');
+  $('paylist').innerHTML=p.payments.map(x=>`${esc(x.product)} · ₹${x.amount_paise/100} · <b>${esc(x.status)}</b> · ${fmt(x.created_at)}`).join('<br>');
+}
+document.addEventListener('click',async e=>{const a=e.target.closest('a[data-f]');if(!a)return;e.preventDefault();
+  const note=a.dataset.s==='removed'?'':prompt('Optional: tell us why (helps your mentor)')||'';
+  await fetch('/api/me/facts/'+a.dataset.f,{method:'POST',headers:H,body:JSON.stringify({status:a.dataset.s,note})});loadProfile();});
+$('pf').addEventListener('submit',async e=>{e.preventDefault();
+  await fetch('/api/me',{method:'PATCH',headers:H,body:JSON.stringify({name:$('p-name').value,goal:$('p-goal').value,motivation:$('p-mot').value,struggle:$('p-str').value})});
+  $('saved').textContent='Saved '+new Date().toLocaleTimeString();loadProfile();});
+
+fetch('/api/config').then(r=>r.json()).then(c=>{
+  if(c.voiceNumber){$('num').innerHTML='<a href="tel:'+c.voiceNumber.replace(/\s/g,'')+'">'+esc(c.voiceNumber)+'</a>';$('call-card').hidden=false;}
+  if(c.paymentsEnabled){$('pay').disabled=false;$('pay').textContent='Get a mentor review · ₹49';}
+});
+$('pay').onclick=async()=>{ $('payerr').textContent='';
+  const r=await fetch('/api/pay/mentor-review',{method:'POST',headers:H}); const j=await r.json();
+  if(!r.ok||!j.redirect_url){$('payerr').textContent=j.error||'Payment could not start';return;} location.href=j.redirect_url; };
+loadProfile(); chat(null);
+</script>
+</body></html>

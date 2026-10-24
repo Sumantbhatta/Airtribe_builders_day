@@ -1,0 +1,118 @@
+{
+  "id": "java-basics",
+  "title": "Beginner Java",
+  "match": ["java", "programming", "coding", "code", "oop"],
+  "discover": [
+    { "key": "goal", "prompt": "What are you learning right now?" },
+    { "key": "motivation", "prompt": "And why are you learning it? A job, college, a project, just curious?" },
+    { "key": "struggle", "prompt": "What feels hardest or most confusing so far? Even a vague feeling is fine." }
+  ],
+  "all_clear_next_step": "You got every check right. Next step: write a 20-line program that reads 5 numbers into an array and prints their average. That uses arrays, loops and division together.",
+  "concepts": [
+    {
+      "id": "post_increment",
+      "name": "x++ vs ++x (post- vs pre-increment)",
+      "keywords": ["increment", "++", "operator", "plus plus", "x++", "counter"],
+      "diagnose": {
+        "id": "pi_d1",
+        "prompt": "Quick one. int x = 5; then System.out.println(x++); What number prints?",
+        "accept": ["\\b5\\b", "\\bfive\\b"],
+        "reject": ["\\b6\\b", "\\bsix\\b"],
+        "explain": "It prints 5. x++ hands over the current value first, then adds one, so x becomes 6 only after the print."
+      },
+      "lesson": "Think of a token machine at a bakery. x++ is: the machine hands you your current number, THEN clicks up for the next person. So println(x++) prints the old value, 5, and x is 6 afterwards. ++x is the opposite: the machine clicks up first, then hands you the new number, so println(++x) prints 6. Rule of thumb: plus-plus AFTER the variable means use first, add later. Plus-plus BEFORE means add first, use after.",
+      "retest": {
+        "id": "pi_r1",
+        "prompt": "Try this one. int y = 10; int z = y++; What is the value of z?",
+        "accept": ["\\b10\\b", "\\bten\\b"],
+        "reject": ["\\b11\\b", "\\beleven\\b"],
+        "explain": "z is 10. y++ gives the old value to z, then y becomes 11."
+      },
+      "next_step": "Next: predict the output of a for loop that uses i++ and print i after the loop ends. Then try the same loop with ++i and notice nothing changes there, and work out why."
+    },
+    {
+      "id": "string_equality",
+      "name": "== vs .equals() for Strings",
+      "keywords": ["string", "strings", "equals", "==", "compare", "comparison", "text"],
+      "diagnose": {
+        "id": "se_d1",
+        "prompt": "String a = new String(\"cat\"); String b = new String(\"cat\"); Does a == b give true or false?",
+        "accept": ["\\bfalse\\b", "\\bno\\b", "not equal"],
+        "reject": ["\\btrue\\b", "\\byes\\b"],
+        "explain": "It's false. == checks whether a and b are the same object in memory, and new String makes two separate objects."
+      },
+      "lesson": "Picture two houses with identical furniture. Double-equals asks: are these the same address? .equals asks: is the stuff inside the same? With new String(\"cat\") twice, you built two houses, so == says false, even though .equals says true because both contain the word cat. For Strings, you almost always care about the contents, so use .equals.",
+      "retest": {
+        "id": "se_r1",
+        "prompt": "You want to check whether the user typed the password \"open123\". Should you use == or .equals?",
+        "accept": ["equal", "dot equals", "\\.equals"],
+        "reject": ["^\\s*==\\s*$", "double equals", "^\\s*equal to\\s*$"],
+        "explain": ".equals, because you care about the text inside, not whether it is the exact same object."
+      },
+      "next_step": "Next: look up equalsIgnoreCase and write a tiny check that accepts \"YES\", \"yes\" and \"Yes\" as the same answer."
+    },
+    {
+      "id": "integer_division",
+      "name": "Integer division drops the remainder",
+      "keywords": ["division", "divide", "math", "maths", "arithmetic", "int", "double", "decimal", "numbers"],
+      "diagnose": {
+        "id": "id_d1",
+        "prompt": "In Java, if both are ints, what is 7 / 2?",
+        "accept": ["^\\s*3\\s*\\.?\\s*$", "\\bthree\\b", "\\b3\\b(?!\\s*(\\.|point)\\s*5)"],
+        "reject": ["3\\s*\\.\\s*5", "three point five", "3 point 5"],
+        "explain": "It's 3. Dividing two ints throws away the remainder instead of giving 3.5."
+      },
+      "lesson": "Imagine sharing 7 whole pizzas between 2 people, and you're not allowed to cut a pizza. Each person gets 3, and one pizza is left over. That's int division: 7 / 2 is 3, and the leftover 1 is what the percent operator gives you, 7 % 2 is 1. If you want 3.5, at least one side has to be a decimal, like 7.0 / 2.",
+      "retest": {
+        "id": "id_r1",
+        "prompt": "Both are ints again. What is 9 / 4?",
+        "accept": ["^\\s*2\\s*\\.?\\s*$", "\\btwo\\b", "\\b2\\b(?!\\s*(\\.|point)\\s*25)"],
+        "reject": ["2\\s*\\.\\s*25", "two point two five", "2 point 25"],
+        "explain": "It's 2. 4 fits into 9 twice, and the remainder 1 is dropped."
+      },
+      "next_step": "Next: write a program that averages three int test scores. Get it wrong on purpose with int division, then fix it with a double."
+    },
+    {
+      "id": "array_index",
+      "name": "Arrays start at index 0",
+      "keywords": ["array", "arrays", "index", "loop", "loops", "for loop", "list", "out of bounds"],
+      "diagnose": {
+        "id": "ai_d1",
+        "prompt": "An array has 5 elements. What is the index of the last element?",
+        "accept": ["\\b4\\b", "\\bfour\\b"],
+        "reject": ["\\b5\\b", "\\bfive\\b"],
+        "explain": "It's 4. Indexes start at 0, so 5 elements use indexes 0 to 4."
+      },
+      "lesson": "Think of a building where the ground floor is floor 0. A 5-storey building has floors 0, 1, 2, 3 and 4. There is no floor 5, and if you press 5, you crash. That crash is Java's ArrayIndexOutOfBoundsException. So the last index is always length minus one, which is why loops are written i < arr.length, not i <= arr.length.",
+      "retest": {
+        "id": "ai_r1",
+        "prompt": "arr.length is 10. What is the last valid index?",
+        "accept": ["\\b9\\b", "\\bnine\\b"],
+        "reject": ["\\b10\\b", "\\bten\\b"],
+        "explain": "It's 9: length minus one."
+      },
+      "next_step": "Next: write a loop that prints an array backwards. Getting the starting index right (length - 1) is the whole exercise."
+    },
+    {
+      "id": "variable_scope",
+      "name": "Variable scope inside blocks",
+      "keywords": ["scope", "variable", "variables", "declare", "block", "brackets", "curly", "cannot find symbol"],
+      "diagnose": {
+        "id": "vs_d1",
+        "prompt": "If you declare int count inside a for loop's body, can you use count after the loop ends? Yes or no?",
+        "accept": ["\\bno\\b", "\\bnope\\b", "can't", "cannot", "can not", "not able"],
+        "reject": ["^\\s*yes\\b", "\\byeah\\b", "\\byep\\b"],
+        "explain": "No. A variable lives only inside the curly braces where it was declared."
+      },
+      "lesson": "Think of a hotel room key card. It works for that room, during your stay. Curly braces are the room. A variable declared inside a loop or if block exists only inside those braces, and once the block closes, the key stops working. That's the cannot find symbol error. If you need the value afterwards, declare the variable before the block, outside the braces, and update it inside.",
+      "retest": {
+        "id": "vs_r1",
+        "prompt": "You declare String msg inside an if block. Can a print statement after the if block's closing brace use msg? Yes or no?",
+        "accept": ["\\bno\\b", "\\bnope\\b", "can't", "cannot", "can not", "not able"],
+        "reject": ["^\\s*yes\\b", "\\byeah\\b", "\\byep\\b"],
+        "explain": "No. msg only exists inside the if block's braces."
+      },
+      "next_step": "Next: take a program that counts even numbers in a loop, and practice moving the counter declaration outside the loop so you can print the total."
+    }
+  ]
+}

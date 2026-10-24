@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Proof Of Life</title><link rel="stylesheet" href="/style.css"></head>
+<body><div class="wrap" style="max-width:1280px">
+<header class="top"><div class="brand">CallMentor · Proof of life</div><span class="muted small" id="now"></span></header>
+
+<form id="login" class="card" style="max-width:360px">
+  <label for="pw">Admin password</label><input id="pw" type="password" autocomplete="current-password">
+  <p><button class="btn">Open</button></p><div class="err" id="err"></div>
+</form>
+
+<div id="app" hidden>
+  <p class="muted small">All times are server timestamps (shown in your local timezone, ISO in tooltip). Rows tagged <span class="tag-test">TEST</span> are internal runs and are excluded from every count.</p>
+  <div class="grid" id="stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
+  <p><button class="btn secondary" id="refresh">Refresh</button> <label class="check" style="display:inline-flex"><input type="checkbox" id="auto" checked> auto-refresh 15s</label></p>
+  <div id="sections"></div>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let auth=sessionStorage.getItem('cm_admin')||'';
+const ts=t=>t?`<span title="${esc(t)}">${esc(new Date(t).toLocaleString())}</span>`:'';
+const cell=(k,v)=>/_at$|^at$/.test(k)?ts(v):typeof v==='object'&&v!==null?`<code class="small">${esc(JSON.stringify(v)).slice(0,300)}</code>`:esc(v);
+function table(title,rows,cols,extra){
+  if(!rows.length) return `<div class="card" style="margin-top:16px"><h2>${title} (0)</h2><p class="muted">None yet.</p></div>`;
+  cols=cols||Object.keys(rows[0]);
+  return `<div class="card" style="margin-top:16px"><h2>${title} (${rows.length})</h2><div class="tablewrap"><table><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}${extra?'<th></th>':''}</tr></thead><tbody>${
+    rows.map(r=>`<tr class="${r.is_test?'tag-test':''}">${cols.map(c=>`<td>${cell(c,r[c])}</td>`).join('')}${extra?`<td>${extra(r)}</td>`:''}</tr>`).join('')}</tbody></table></div></div>`;
+}
+async function load(){
+  const r=await fetch('/api/admin/summary',{headers:{authorization:auth}});
+  if(r.status===401){$('app').hidden=true;$('login').hidden=false;return false;}
+  const d=await r.json(); $('login').hidden=true; $('app').hidden=false; $('now').innerHTML='Loaded '+ts(d.now);
+  const c=d.counts;
+  const stat=(n,l)=>`<div class="card"><div class="stat">${n}</div><div class="muted small">${l}</div></div>`;
+  $('stats').innerHTML=stat(c.real_learners,'real learners (excl. test)')+stat(c.consented_learners,'with consent')+stat(c.real_sessions,'sessions')+stat(c.real_outcomes,'finished loops')+stat(c.real_unstuck,'got unstuck (wrong→right)')+stat(c.real_payments,'successful payments')+stat(c.agent_runs,'agent runs')+stat(c.pending_approvals,'pending approvals')+stat(c.test_learners,'test learners (excluded)');
+  $('sections').innerHTML=
+    table('Signups',d.learners,['id','name','phone','consent','source','goal','struggle','created_at','is_test'],r=>`<button class="small" data-test="${r.id}" data-v="${r.is_test?0:1}">${r.is_test?'unmark test':'mark test'}</button>`)+
+    table('Sessions / calls',d.sessions,['id','learner_id','name','channel','stage','external_id','turns','started_at','ended_at'],r=>`<button class="small" data-sess="${r.id}">transcript</button>`)+
+    table('Learning outcomes',d.outcomes,['id','learner_id','name','channel','gap_concept','before_correct','after_correct','next_step','created_at'])+
+    table('Payments',d.payments,['id','learner_id','name','product','amount_paise','status','merchant_order_ref','provider_order_id','created_at','updated_at'])+
+    table('Approvals (human in the loop)',d.approvals,['id','agent_run_id','learner_id','name','kind','status','draft','final_text','decided_by','decided_at','created_at'])+
+    table('Agent runs',d.agentRuns,['id','agent','trigger','status','input','output','created_at','finished_at'])+
+    table('Event log (append-only)',d.events,['id','type','learner_id','session_id','payload','created_at'])+
+    `<div class="card" style="margin-top:16px" id="tx" hidden></div>`;
+  return true;
+}
+$('login').addEventListener('submit',async e=>{e.preventDefault();auth='Basic '+btoa('admin:'+$('pw').value);sessionStorage.setItem('cm_admin',auth);if(!await load())$('err').textContent='Wrong password';});
+$('refresh').onclick=load;
+setInterval(()=>{if($('auto').checked&&!$('app').hidden)load()},15000);
+document.addEventListener('click',async e=>{
+  const t=e.target.closest('[data-test]'); if(t){await fetch('/api/admin/learners/'+t.dataset.test+'/test',{method:'POST',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify({is_test:t.dataset.v==='1'})});load();}
+  const s=e.target.closest('[data-sess]'); if(s){const r=await fetch('/api/admin/sessions/'+s.dataset.sess,{headers:{authorization:auth}});const j=await r.json();const tx=$('tx');tx.hidden=false;
+    tx.innerHTML=`<h2>Transcript · session ${j.id} · ${esc(j.channel)}</h2>`+(j.transcript||[]).map(m=>`<div class="small"><span class="muted">${ts(m.at)}</span> <b>${esc(m.role)}:</b> ${esc(m.text)}</div>`).join('');tx.scrollIntoView();}
+});
+if(auth) load();
+</script>
+</body></html>
