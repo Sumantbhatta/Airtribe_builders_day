@@ -338,3 +338,12 @@ const port = Number(process.env.PORT || 3000);
 await initDb();
 app.listen(port, () => console.log(`listening on :${port} (db=${dbKind})`));
 
+// Free Render instances sleep after ~15 min without inbound traffic. Pinging our own
+// public URL goes through Render's router, so it counts as inbound and keeps us warm.
+const selfUrl = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL;
+if (selfUrl) {
+  setInterval(() => {
+    fetch(`${selfUrl.replace(/\/$/, "")}/health?ping=self`).catch((e) => console.error("keepalive failed", e?.message));
+  }, 10 * 60 * 1000);
+}
+
