@@ -7,6 +7,7 @@ import { initDb, q, one, logEvent, dbKind } from "./db.js";
 import { aiConfigured, aiStatus, probe } from "./ai/index.js";
 import { loadContext, mentorTurn } from "./mentor.js";
 import { chatCompletions, voiceConfigured, voiceSession } from "./voice.js";
+import { mcpHandler } from "./mcp.js";
 
 // The ElevenLabs CLI stores ELEVENLABS_API_KEY in .env.local for local dev; Render sets it directly.
 dotenv.config({ path: ".env.local" });
@@ -450,6 +451,9 @@ app.post(
     res.json(await decide(Number(req.params.id), decision, `${by.slice(0, 60)} via agenticorg`, req.body.final_text));
   }),
 );
+
+// MCP server for the AgenticOrg "Nudge" agent (connector: CallMentor learner-success tools).
+app.all("/mcp", wrap(mcpHandler));
 
 // ---------- Admin / proof of life ----------
 

@@ -21,7 +21,10 @@ export async function stalledLearners() {
     [String(STALL_MINUTES)],
   );
   return rows.map((r) => {
-    const gapId = r.state?.gap ?? r.state?.current ?? null;
+    // Mentor sessions keep gap/current at the top level (pending.concept for a waiting
+    // question); offline-mode turns keep the scripted engine's state under state.engine.
+    const st = r.state ?? {};
+    const gapId = st.gap ?? st.pending?.concept ?? st.current ?? st.engine?.gap ?? st.engine?.current ?? null;
     const facts = gapId ? getConcept(defaultTopic().id, gapId) : undefined;
     return {
       learner_id: r.learner_id,
