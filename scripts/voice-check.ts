@@ -31,7 +31,23 @@ const bad = await llm([{ role: "user", content: "hi" }], { learner: s.userId }, 
 check(bad.status === 401, "rejects wrong bearer secret");
 
 const forged = await llm([{ role: "user", content: "hi" }], { learner: "lr_1_00000000000000000000000000000000" }, SECRET, "lr_1_00000000000000000000000000000000");
-check(forged.status === 200 && /couldn't find your CallMentor profile/.test(forged.text), "forged learner id gets no profile access");
+check(forged.status === 200 && !/Test Voice/.test(forged.text), "forged learner id falls back to the console guest, not that profile");
+
+// Phone call: ElevenLabs puts the caller's number into the system prompt.
+const callerPhone = "+91" + String(7e9 + Math.floor(Math.random() * 9e8));
+const phoneTurn = async (t: string) => llm([{ role: "system", content: `You are CallMentor.
+CALLER_ID: ${callerPhone}
+CHANNEL: phone` }, { role: "user", content: t }], {}, SECRET, "");
+const p1 = await phoneTurn("Hi, my name is Arjun and I'm learning Java arrays.");
+check(p1.status === 200 && p1.text.length > 10, "phone caller (no web session) gets a mentor reply");
+const ADMIN = "Basic " + Buffer.from("admin:" + (process.env.ADMIN_PASSWORD || "local-dev-only")).toString("base64");
+const sum: any = await (await fetch(`${BASE}/api/admin/summary`, { headers: { authorization: ADMIN } })).json();
+const caller = sum.learners.filter((l: any) => l.phone === callerPhone);
+check(caller.length === 1 && caller[0].source === "phone", "phone caller stored as one learner by caller ID");
+await phoneTurn("What did I just tell you I'm learning?");
+const sum2: any = await (await fetch(`${BASE}/api/admin/summary`, { headers: { authorization: ADMIN } })).json();
+check(sum2.learners.filter((l: any) => l.phone === callerPhone).length === 1, "second call from same number reuses the same learner");
+if (caller[0]) await fetch(`${BASE}/api/admin/learners/${caller[0].id}/test`, { method: "POST", headers: { authorization: ADMIN, "content-type": "application/json" }, body: JSON.stringify({ is_test: true }) });
 
 const turns = [
   "Hi, I'm learning Java. Mujhe x plus plus aur plus plus x mein confusion hai.",

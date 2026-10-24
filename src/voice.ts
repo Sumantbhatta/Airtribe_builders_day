@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
 import { one, logEvent } from "./db.js";
+import { createLearner, learnerByPhone, normalizePhone } from "./store.js";
 import { mentorTurn } from "./mentor.js";
 import type { Learner } from "./store.js";
 
@@ -40,6 +41,30 @@ export async function voiceSession(l: Learner) {
   };
 }
 
+const systemText = (messages: any[]) =>
+  (messages ?? []).filter((m: any) => m?.role === "system").map((m: any) => (typeof m.content === "string" ? m.content : "")).join("\n");
+
+/**
+ * Who is on the line: a signed web learner, else the phone caller (system__caller_id,
+ * which the agent prompt passes as "CALLER_ID: ..."), else a shared TEST guest for
+ * calls started from the ElevenLabs console.
+ */
+async function identify(body: any, extra: any): Promise<Learner | undefined> {
+  const id = verifyLearner(extra.learner) ?? verifyLearner(body.user_id);
+  if (id) return one<Learner>("select * from learners where id=$1", [id]);
+  const sys = systemText(body.messages);
+  const phone = normalizePhone(sys.match(/CALLER_ID:\s*(\+?[\d\s-]{7,20})/)?.[1]);
+  if (phone) {
+    const known = await learnerByPhone(phone);
+    if (known) return known;
+    const l = await createLearner({ name: "Caller", phone, consent: false, isTest: false, source: "phone" });
+    await logEvent("voice.new_caller", {}, l.id);
+    return l;
+  }
+  const guest = await one<Learner>("select * from learners where source='voice-console' and is_test order by id limit 1");
+  return guest ?? createLearner({ name: "Console Guest", phone: null, consent: true, isTest: true, source: "voice-console" });
+}
+
 function lastUserText(messages: any[]): string {
   for (let i = (messages ?? []).length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -69,8 +94,7 @@ export async function chatCompletions(req: Request, res: Response) {
   });
   if (!okAuth) return res.status(401).json({ error: { message: "unauthorized" } });
 
-  const learnerId = verifyLearner(extra.learner) ?? verifyLearner(body.user_id);
-  const learner = learnerId ? await one<Learner>("select * from learners where id=$1", [learnerId]) : undefined;
+  const learner = await identify(body, extra);
   const text = lastUserText(body.messages).trim();
 
   const id = `chatcmpl-${crypto.randomUUID()}`;
