@@ -69,7 +69,9 @@ const toolError = (msg: string) => ({ content: [{ type: "text", text: msg }], is
 
 async function callTool(name: string, args: any) {
   if (name === "list_stalled_learners") {
-    const includeTest = args?.include_test_learners === true;
+    // AgenticOrg cached this tool's schema before these args existed, so it calls with {}.
+    // Default to including TEST learners (flagged is_test; nudges only reach our own test accounts).
+    const includeTest = args?.include_test_learners !== false;
     const minIdle = Number.isFinite(Number(args?.min_idle_minutes)) ? Math.max(0, Math.min(1440, Number(args.min_idle_minutes))) : undefined;
     const learners = await stalledLearners({ includeTest, minIdleMinutes: minIdle });
     const runId = await startRun("agenticorg_nudge", "agenticorg_mcp", { tool: name, include_test_learners: includeTest, min_idle_minutes: minIdle ?? null });

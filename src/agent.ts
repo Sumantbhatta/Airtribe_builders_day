@@ -5,7 +5,7 @@ import { getConcept, defaultTopic } from "./engine.js";
 // before RETEST, drafts a nudge, and a HUMAN must approve before anything is sent.
 // Our API is the system of record: every run, draft, decision and send is logged here.
 
-export const STALL_MINUTES = Number(process.env.STALL_MINUTES || 10);
+export const STALL_MINUTES = Number(process.env.STALL_MINUTES || 5);
 
 /** Internal test runs may include is_test learners; they stay tagged and excluded from traction counts. */
 export async function stalledLearners(opts: { includeTest?: boolean; minIdleMinutes?: number } = {}) {
