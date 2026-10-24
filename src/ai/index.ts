@@ -44,7 +44,7 @@ const h = (p: string, m: string) => {
 export class AiUnavailable extends Error {}
 
 export function providers(): Provider[] {
-  const order = (process.env.AI_PROVIDERS || "gemini,groq").split(",").map((s) => s.trim().toLowerCase());
+  const order = (process.env.AI_PROVIDERS || "groq,gemini").split(",").map((s) => s.trim().toLowerCase());
   return order.map((n) => ALL.find((p) => p.name === n)).filter((p): p is Provider => !!p && p.configured());
 }
 

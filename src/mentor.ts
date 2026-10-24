@@ -41,7 +41,7 @@ export interface TurnResult {
   ai?: { provider: string; model: string; latency_ms: number; extract_ok: boolean };
 }
 
-const HISTORY_LIMIT = 24;
+const HISTORY_LIMIT = 16;
 const OFFLINE_NOTE =
   "(My AI mentor is offline for a moment, so here's a standard check from my lesson notes. Ask your question again in a minute and I'll answer it properly.)";
 
@@ -75,7 +75,7 @@ export async function loadContext(l: Learner): Promise<Ctx> {
   const history: ChatMessage[] = [];
   for (const r of ordered) {
     const role = r.t.role === "learner" ? "user" : "assistant";
-    const text = String(r.t.text ?? "").slice(0, 1200);
+    const text = String(r.t.text ?? "").slice(0, 600);
     if (!text) continue;
     const last = history[history.length - 1];
     if (last && last.role === role) last.text += `\n${text}`;
@@ -85,14 +85,31 @@ export async function loadContext(l: Learner): Promise<Ctx> {
   return { learner: l, facts, outcomes, history, lastChannel: ordered.length ? ordered[ordered.length - 1].channel : null };
 }
 
-function referenceNotes(): string {
-  const t = defaultTopic();
-  return t.concepts
-    .map(
-      (c) =>
-        `- [${c.id}] ${c.name}\n  Check: ${c.diagnose.prompt} -> ${c.diagnose.explain}\n  Retest: ${c.retest.prompt} -> ${c.retest.explain}\n  Core explanation: ${c.lesson}\n  Practice next: ${c.next_step}`,
+/** Concepts worth full reference notes this turn: on record, waiting, or mentioned recently. */
+function relevantConcepts(ctx: Ctx, st: MentorState, message: string): Set<string> {
+  const ids = new Set<string>([...ctx.facts.map((f) => f.concept), ...Object.keys(st.gaps)]);
+  if (st.pending) ids.add(st.pending.concept);
+  const recent = [message, ...ctx.history.filter((m) => m.role === "user").slice(-2).map((m) => m.text)].join(" ").toLowerCase();
+  for (const c of defaultTopic().concepts) if (c.keywords.some((k) => recent.includes(k.toLowerCase()))) ids.add(c.id);
+  return ids;
+}
+
+/** Full notes only for relevant concepts (keeps prompts within free-tier token limits). */
+function referenceNotes(relevant: Set<string>): string {
+  return defaultTopic()
+    .concepts.map((c) =>
+      relevant.has(c.id)
+        ? `- [${c.id}] ${c.name}\n  Check: ${c.diagnose.prompt} -> ${c.diagnose.explain}\n  Retest: ${c.retest.prompt} -> ${c.retest.explain}\n  Core explanation: ${c.lesson}\n  Practice next: ${c.next_step}`
+        : `- [${c.id}] ${c.name}`,
     )
     .join("\n");
+}
+
+/** Some models ignore the formatting rules: drop separators everywhere and all markdown on voice. */
+export function tidy(text: string, channel: string): string {
+  let t = text.replace(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  if (channel === "voice") t = t.replace(/```[a-z]*\n?/gi, "").replace(/\*\*|__|`/g, "").replace(/^#+\s*/gm, "");
+  return t;
 }
 
 function learnerBlock(ctx: Ctx, st: MentorState): string {
@@ -117,7 +134,7 @@ function learnerBlock(ctx: Ctx, st: MentorState): string {
   ].join("\n");
 }
 
-function mentorSystem(ctx: Ctx, st: MentorState, channel: string): string {
+function mentorSystem(ctx: Ctx, st: MentorState, channel: string, message = ""): string {
   const pending = st.pending
     ? `A practice question is waiting for an answer.\nQuestion: ${st.pending.prompt}\nCorrect answer (never reveal before they try): ${st.pending.answer_key}\nIf the learner's message attempts it, first say clearly whether they are right and explain briefly. If wrong, teach the idea a different way, then ask ONE new short check question on the same concept.`
     : "No practice question is waiting.";
@@ -144,8 +161,8 @@ ${learnerBlock(ctx, st)}
 
 ${pending}
 
-Reference notes (verified, for grounding):
-${referenceNotes()}
+Reference notes (verified, for grounding; one-line entries are listed for their ids only):
+${referenceNotes(relevantConcepts(ctx, st, message))}
 
 ${evidenceInstructions()}`;
 }
@@ -368,7 +385,7 @@ async function greeting(l: Learner): Promise<string> {
       ? `Last time we worked on ${prettyConcept(last.gap_concept)}${last.after_correct ? ", and you got it by the end" : ", and it still needed practice"}.`
       : gap
         ? `Last time, ${prettyConcept(gap.concept)} was tripping you up.`
-        : `Last time you told me you're learning ${l.goal}.`;
+        : `Last time you told me your goal: ${l.goal}.`;
     return `Welcome back, ${l.name}! ${topic} Want to pick that up, try a quick practice question, or ask me anything?`;
   }
   return `Hi ${l.name}! I'm your CallMentor. Tell me what you're learning or curious about, in English, Hindi or Hinglish, and ask me anything. Whenever you like, I can give you a quick practice question to find exactly where you're stuck.`;
@@ -431,10 +448,10 @@ export async function mentorTurn(l: Learner, message: string | null, channel = "
   if (aiConfigured()) {
     try {
       const req = {
-        system: mentorSystem(ctx, st, channel),
+        system: mentorSystem(ctx, st, channel, message),
         messages: [...ctx.history, { role: "user" as const, text: message }],
         temperature: 0.6,
-        maxTokens: 2048, // thinking tokens count toward this on Gemini; 900 truncated replies
+        maxTokens: 1000, // visible reply + evidence; gemini.ts adds headroom for thinking
         timeoutMs: 30_000,
         firstChunkMs: 10_000,
       };
@@ -443,7 +460,7 @@ export async function mentorTurn(l: Learner, message: string | null, channel = "
       const r = await stream(req, filter.push);
       const { visible, evidence } = splitEvidence(r.text);
       filter.flush(visible);
-      const reply = (r.partial ? `${visible}\n(Sorry, my connection dropped there. Ask me to continue.)` : visible).trim();
+      const reply = tidy(r.partial ? `${visible}\n(Sorry, my connection dropped there. Ask me to continue.)` : visible, channel);
       // One call per turn when the model includes evidence; a second call only when it didn't.
       let x: Extraction | null = evidence;
       let evidenceVia = evidence ? "inline" : "none";

@@ -14,7 +14,8 @@ export function rankGroq(ids: string[], preferred: string[] = []): string[] {
     const m = id.match(/(\d+)b/i);
     return m ? Number(m[1]) : 0;
   };
-  const usable = ids.filter((id) => !bad.test(id)).sort((a, b) => size(b) - size(a));
+  // Small models (<20B) gave incoherent Hinglish and wrong grading in testing; keep them out.
+  const usable = ids.filter((id) => !bad.test(id) && size(id) >= 20).sort((a, b) => size(b) - size(a));
   const pinned = preferred.filter((p) => ids.includes(p));
   return [...pinned, ...usable.filter((id) => !pinned.includes(id))];
 }

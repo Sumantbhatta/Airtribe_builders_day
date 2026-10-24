@@ -24,7 +24,8 @@ export function rankGemini(ids: string[], preferred: string[] = []): string[] {
 function body(req: CompletionRequest, model: string) {
   const generationConfig: Record<string, unknown> = {
     temperature: req.temperature ?? 0.5,
-    maxOutputTokens: req.maxTokens ?? 1024,
+    // Thinking tokens count toward the output cap on Gemini; give them headroom so replies aren't cut.
+    maxOutputTokens: (req.maxTokens ?? 1024) + (noThinkingCfg.has(model) ? 0 : 1024),
   };
   if (!noThinkingCfg.has(model)) generationConfig.thinkingConfig = { thinkingLevel: "low" };
   if (req.jsonSchema) {

@@ -58,7 +58,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=t=>new Date(t).toLocaleString();
 
-function fmtMsg(t){return esc(t).replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');}
+function fmtMsg(t){return esc(t).replace(/```[a-z]*\n?([\s\S]*?)```/gi,(m,c)=>'<pre class="code">'+c.replace(/\n$/,'')+'</pre>').replace(/^\s*-{3,}\s*$/gm,'').replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');}
 function add(role,text,src){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');if(role==='l')d.textContent=text;else d.innerHTML=fmtMsg(text);if(role!=='l'&&src==='fallback'){const b=document.createElement('div');b.className='small muted';b.textContent='offline mode: standard lesson, not AI-personalised';d.appendChild(b);}$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
 async function chat(message){
   if(!message){
