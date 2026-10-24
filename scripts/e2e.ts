@@ -34,6 +34,26 @@ const fact = me.facts[0];
 const corr = await post(`/api/me/facts/${fact.id}`, { status: "gap", note: "still shaky" }, H);
 check(corr.status === 200, "learner can correct a profile fact");
 
+check(r.source === "ai" || r.source === "fallback", `chat turns carry a source label (${r.source})`);
+if (process.env.EXPECT_SOURCE) check(r.source === process.env.EXPECT_SOURCE, `turn source is ${process.env.EXPECT_SOURCE}`);
+
+// 1b. Multi-user isolation: two learners interleaved, each sees only their own data
+{
+  const mk = async (n: string) => (await post("/api/signup", { name: n, phone: rand(), consent: true, test: true, source: "e2e" })).json.token as string;
+  const [ta, tb] = [await mk("Iso A"), await mk("Iso B")];
+  const sa = (m: string | null) => post("/api/chat", { message: m }, { "x-learner-token": ta });
+  const sb = (m: string | null) => post("/api/chat", { message: m }, { "x-learner-token": tb });
+  await sa(null); await sb(null);
+  for (const [x, y] of [["Java", "Java"], ["job", "college"], ["arrays", "division"]]) { await sa(x); await sb(y); }
+  const ra = (await sa("4")).json, rb = (await sb("3.5")).json;
+  check(ra.stage !== rb.stage || ra.sessionId !== rb.sessionId, "isolated sessions advance independently");
+  const ma = await (await fetch(BASE + "/api/me", { headers: { "x-learner-token": ta } })).json() as any;
+  const mb = await (await fetch(BASE + "/api/me", { headers: { "x-learner-token": tb } })).json() as any;
+  check(ma.learner.name === "Iso A" && mb.learner.name === "Iso B", "each token reads only its own profile");
+  check(ma.learner.struggle === "arrays" && mb.learner.struggle === "division", "profile answers not mixed between learners");
+  check(!mb.facts.some((f: any) => f.concept === "array_index" && f.status === "demonstrated"), "A's demonstrated fact not visible to B");
+}
+
 // 2. Voice tools as ElevenLabs would call them
 const T = { "x-tool-secret": TOOL };
 const vphone = "+91" + rand();

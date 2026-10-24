@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { AiQuestion, LearnerCtx, Tutor } from "./tutor.js";
 
 // DISCOVER -> DIAGNOSE -> TEACH -> RETEST -> UPDATE PROFILE -> NEXT STEP
-// Deterministic and config-driven, so the web chat works with no LLM key and
-// the voice agent can pull the same questions/lessons through server tools.
+// Config-driven curriculum. With an AI tutor, each step is personalised by the LLM
+// (grounded in this config). Without one, or when a call fails, the step falls back
+// to the config content and the turn is labelled "fallback" so nobody mistakes it
+// for a live AI response.
 
 export interface Question {
   id: string;
@@ -31,6 +34,18 @@ export interface Topic {
 }
 
 export type Stage = "DISCOVER" | "DIAGNOSE" | "RETEST" | "DONE";
+/** ai = produced by the LLM; fallback = config content because AI was off or failed. */
+export type TurnSource = "ai" | "fallback";
+
+/** The question currently waiting for an answer. */
+export interface AskedQuestion {
+  concept: string;
+  phase: "diagnose" | "retest";
+  prompt: string;
+  answerKey: string;
+  /** "config" questions can also be graded by the deterministic regex grader. */
+  origin: "config" | "ai";
+}
 
 export interface EngineState {
   stage: Stage;
@@ -44,6 +59,9 @@ export interface EngineState {
   gap?: string;
   before?: boolean;
   after?: boolean;
+  asked?: AskedQuestion;
+  language?: string;
+  misconception?: string;
 }
 
 export interface LearnerView {
@@ -62,6 +80,7 @@ export interface Attempt {
   question: string;
   answer: string;
   correct: boolean;
+  gradedBy?: "ai" | "engine" | "engine_fallback";
 }
 export interface Outcome {
   topic: string;
@@ -78,6 +97,12 @@ export interface Effects {
   fact(concept: string, status: "demonstrated" | "gap" | "inferred_gap", kind: "demonstrated" | "inferred", evidence: string): Promise<void>;
   profile(fields: Partial<Record<"goal" | "motivation" | "struggle", string>>): Promise<void>;
   outcome(o: Outcome): Promise<void>;
+}
+
+export interface TurnResult {
+  state: EngineState;
+  replies: string[];
+  source: TurnSource;
 }
 
 const MAX_DIAGNOSE = 3;
@@ -99,6 +124,14 @@ export function grade(q: Question, answer: string): boolean {
   if (!a) return false;
   const hit = (p: string) => new RegExp(p, "i").test(a);
   return q.accept.some(hit) && !(q.reject ?? []).some(hit);
+}
+
+/** Last-resort check for an AI-written question when the AI grader is unavailable. */
+export function looseMatch(answerKey: string, answer: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}.=]+/gu, " ").trim();
+  const key = norm(answerKey).split(" ").slice(0, 3).join(" ");
+  const a = norm(answer);
+  return !!key && a.length <= 80 && new RegExp(`(^| )${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}( |$)`).test(a);
 }
 
 /** Order concepts: known gaps first, then ones matching what the learner says is hard, skipping demonstrated ones. */
@@ -127,7 +160,43 @@ function pickTopic(goal: string): Topic {
   return TOPICS.find((t) => t.match.some((m) => g.includes(m))) ?? defaultTopic();
 }
 
-export function start(learner: LearnerView): { state: EngineState; replies: string[] } {
+const configQ = (c: Concept, phase: "diagnose" | "retest"): AskedQuestion => {
+  const q = phase === "retest" ? c.retest : c.diagnose;
+  return { concept: c.id, phase, prompt: q.prompt, answerKey: q.explain, origin: "config" };
+};
+const aiQ = (c: Concept, phase: "diagnose" | "retest", q: AiQuestion): AskedQuestion => ({
+  concept: c.id,
+  phase,
+  prompt: q.prompt,
+  answerKey: q.answer_key,
+  origin: "ai",
+});
+
+function ctxOf(s: EngineState, name: string): LearnerCtx {
+  return { name, goal: s.answers.goal, motivation: s.answers.motivation, struggle: s.answers.struggle, language: s.language };
+}
+
+/** Choose the concept order and the first question (AI if possible, else config). */
+async function planDiagnosis(s: EngineState, name: string, facts: LearnerView["facts"], ai?: Tutor): Promise<{ intro: string | null; ok: boolean }> {
+  const t = getTopic(s.topicId);
+  if (ai) {
+    const status = Object.fromEntries(facts.map((f) => [f.concept, f.status]));
+    const p = await ai.plan(ctxOf(s, name), t, status);
+    if (p) {
+      s.queue = p.order;
+      s.current = p.order[0];
+      s.asked = aiQ(getConcept(t.id, p.order[0])!, "diagnose", p.first);
+      s.language = p.language;
+      return { intro: p.intro, ok: true };
+    }
+  }
+  s.queue = prioritize(t, s.answers.struggle ?? "", facts);
+  s.current = s.queue[0];
+  s.asked = configQ(getConcept(t.id, s.current)!, "diagnose");
+  return { intro: null, ok: !ai };
+}
+
+export async function start(learner: LearnerView, ai?: Tutor): Promise<TurnResult> {
   const topic = defaultTopic();
   const returning = !!(learner.goal && learner.struggle);
   const state: EngineState = {
@@ -142,122 +211,159 @@ export function start(learner: LearnerView): { state: EngineState; replies: stri
   if (returning) {
     state.answers = { goal: learner.goal!, motivation: learner.motivation ?? "", struggle: learner.struggle! };
     state.topicId = pickTopic(learner.goal!).id;
-    state.queue = prioritize(getTopic(state.topicId), learner.struggle!, learner.facts);
     state.stage = "DIAGNOSE";
-    const first = getConcept(state.topicId, state.queue[0])!;
-    state.current = first.id;
+    const { ok } = await planDiagnosis(state, learner.name, learner.facts, ai);
     return {
       state,
-      replies: [
-        `Welcome back, ${learner.name}. Last time you said "${learner.struggle}" felt hard. Let's see where you are now.`,
-        first.diagnose.prompt,
-      ],
+      source: ai && ok ? "ai" : "fallback",
+      replies: [`Welcome back, ${learner.name}. Last time you said "${learner.struggle}" felt hard. Let's see where you are now.`, state.asked!.prompt],
     };
   }
   return {
     state,
+    source: "fallback",
     replies: [
-      `Hi ${learner.name}! I'm your learning companion. No forms. I'll ask a couple of quick questions, find the one thing tripping you up, and fix it with you.`,
+      `Hi ${learner.name}! I'm your learning companion. No forms. I'll ask a couple of quick questions, find the one thing tripping you up, and fix it with you. You can talk to me in any language.`,
       topic.discover[0].prompt,
     ],
   };
 }
 
-export async function step(state: EngineState, message: string, fx: Effects): Promise<{ state: EngineState; replies: string[] }> {
+export async function step(state: EngineState, message: string, fx: Effects, ai?: Tutor, learnerName = "there"): Promise<TurnResult> {
   const s: EngineState = structuredClone(state);
   const topic = getTopic(s.topicId);
   const msg = message.trim();
   const replies: string[] = [];
+  let aiFailed = !ai; // no tutor configured counts as fallback
+  const done = (): TurnResult => ({ state: s, replies, source: aiFailed ? "fallback" : "ai" });
 
   if (s.stage === "DONE") {
-    if (/\b(again|another|more|next|yes|continue|go)\b/i.test(msg)) {
+    if (/\b(again|another|more|next|yes|continue|go|haan|ha|chalo|aur)\b/i.test(msg)) {
       s.queue = s.queue.filter((id) => id !== s.gap && !s.demonstrated.includes(id) && !s.tried.includes(id));
       if (!s.queue.length) {
-        return { state: s, replies: ["You've worked through every concept I have for this topic today. Check your profile page for your next step."] };
+        replies.push("You've worked through every concept I have for this topic today. Check your profile page for your next step.");
+        return { state: s, replies, source: "fallback" };
       }
-      Object.assign(s, { stage: "DIAGNOSE", tried: [], gap: undefined, before: undefined, after: undefined, current: s.queue[0] });
-      return { state: s, replies: ["Let's find the next thing.", getConcept(s.topicId, s.queue[0])!.diagnose.prompt] };
+      Object.assign(s, { stage: "DIAGNOSE", tried: [], gap: undefined, before: undefined, after: undefined, misconception: undefined, current: s.queue[0] });
+      const c = getConcept(s.topicId, s.queue[0])!;
+      const q = ai ? await ai.ask(ctxOf(s, learnerName), c, "diagnose", [c.diagnose.prompt]) : null;
+      if (ai && !q) aiFailed = true;
+      s.asked = q ? aiQ(c, "diagnose", q) : configQ(c, "diagnose");
+      replies.push("Let's find the next thing.", s.asked.prompt);
+      return done();
     }
-    return { state: s, replies: ["We're done for this round. Type \"again\" for another check, or open your profile to see what we found."] };
+    replies.push(`We're done for this round. Type "again" for another check, or open your profile to see what we found.`);
+    return { state: s, replies, source: "fallback" };
   }
 
   if (s.stage === "DISCOVER") {
     const d = topic.discover[s.discoverIdx];
-    s.answers[d.key] = msg;
-    await fx.profile({ [d.key]: msg });
+    s.answers[d.key] = msg.slice(0, 300);
+    await fx.profile({ [d.key]: msg.slice(0, 300) });
     if (d.key === "goal") s.topicId = pickTopic(msg).id;
     s.discoverIdx++;
     const t = getTopic(s.topicId);
     if (s.discoverIdx < t.discover.length) {
-      replies.push(t.discover[s.discoverIdx].prompt);
-      return { state: s, replies };
+      const next = t.discover[s.discoverIdx];
+      const r = ai ? await ai.discoverNext(ctxOf(s, learnerName), s.answers, next.key, next.prompt) : null;
+      if (ai && !r) aiFailed = true;
+      if (r) s.language = r.language;
+      replies.push(r?.question ?? next.prompt);
+      return done();
     }
     for (const c of inferredGaps(t, s.answers.struggle ?? "")) {
       await fx.fact(c, "inferred_gap", "inferred", `Learner said: "${s.answers.struggle}"`);
     }
-    s.queue = prioritize(t, s.answers.struggle ?? "", []);
     s.stage = "DIAGNOSE";
-    s.current = s.queue[0];
-    replies.push(`Got it. Let me ask one quick ${t.title} question to find exactly where you're stuck. Just answer in your own words, and "I don't know" is a fine answer.`);
-    replies.push(getConcept(s.topicId, s.current)!.diagnose.prompt);
-    return { state: s, replies };
+    const { intro, ok } = await planDiagnosis(s, learnerName, [], ai);
+    if (ai && !ok) aiFailed = true;
+    replies.push(intro || `Got it. Let me ask one quick ${t.title} question to find exactly where you're stuck. Just answer in your own words, and "I don't know" is a fine answer.`);
+    replies.push(s.asked!.prompt);
+    return done();
   }
 
   const c = getConcept(s.topicId, s.current!)!;
+  const asked = s.asked ?? configQ(c, s.stage === "RETEST" ? "retest" : "diagnose");
+  const phase = asked.phase;
+  const nextId = phase === "diagnose" ? s.queue.find((id) => id !== c.id && !s.tried.includes(id)) : undefined;
+  const canContinue = !!nextId && s.tried.length + 1 < MAX_DIAGNOSE;
 
-  if (s.stage === "DIAGNOSE") {
-    const ok = grade(c.diagnose, msg);
+  // ---- Grade: AI first (any language), deterministic grader as fallback / second opinion.
+  const ev = ai
+    ? await ai.evaluate({
+        ctx: ctxOf(s, learnerName),
+        concept: c,
+        phase,
+        question: { prompt: asked.prompt, answer_key: asked.answerKey },
+        answer: msg,
+        nextConcept: canContinue ? getConcept(s.topicId, nextId!) : undefined,
+      })
+    : null;
+  if (ai && !ev) aiFailed = true;
+  if (ev) s.language = ev.language;
+  const detCorrect = asked.origin === "config" ? grade(phase === "retest" ? c.retest : c.diagnose, msg) : looseMatch(asked.answerKey, msg);
+  const correct = ev ? ev.correct : detCorrect;
+  const gradedBy = ev ? "ai" : asked.origin === "config" ? "engine" : "engine_fallback";
+  const qid = asked.origin === "config" ? (phase === "retest" ? c.retest.id : c.diagnose.id) : `${c.id}_${phase}_ai`;
+  await fx.attempt({ topic: s.topicId, concept: c.id, phase, questionId: qid, question: asked.prompt, answer: msg, correct, gradedBy });
+
+  if (phase === "diagnose") {
     s.tried.push(c.id);
-    await fx.attempt({ topic: s.topicId, concept: c.id, phase: "diagnose", questionId: c.diagnose.id, question: c.diagnose.prompt, answer: msg, correct: ok });
-    if (ok) {
+    if (correct) {
       s.demonstrated.push(c.id);
-      await fx.fact(c.id, "demonstrated", "demonstrated", `Answered "${msg}" to: ${c.diagnose.prompt}`);
-      const nextId = s.queue.find((id) => !s.tried.includes(id));
-      if (nextId && s.tried.length < MAX_DIAGNOSE) {
-        s.current = nextId;
-        replies.push(`Correct. ${c.diagnose.explain} You've got that one. Next:`);
-        replies.push(getConcept(s.topicId, nextId)!.diagnose.prompt);
-        return { state: s, replies };
+      await fx.fact(c.id, "demonstrated", "demonstrated", `Answered "${msg.slice(0, 120)}" to: ${asked.prompt}`);
+      const feedback = ev?.feedback ?? `Correct. ${c.diagnose.explain}`;
+      if (canContinue) {
+        const nc = getConcept(s.topicId, nextId!)!;
+        s.current = nc.id;
+        if (ev && !ev.next_question) aiFailed = true;
+        s.asked = ev?.next_question ? aiQ(nc, "diagnose", ev.next_question) : configQ(nc, "diagnose");
+        replies.push(`${feedback} You've got that one. Next:`, s.asked.prompt);
+        return done();
       }
       s.stage = "DONE";
+      s.asked = undefined;
       const nextStep = topic.all_clear_next_step;
       await fx.outcome({ topic: s.topicId, gapConcept: null, beforeCorrect: null, afterCorrect: null, nextStep, summary: `No gap found in ${s.tried.length} checks; demonstrated: ${s.demonstrated.join(", ")}` });
-      replies.push(`Correct again. ${c.diagnose.explain}`);
-      replies.push(`You didn't miss a single check today, so no gap to fix right now. Your next step: ${nextStep}`);
-      return { state: s, replies };
+      replies.push(feedback, `You didn't miss a single check today, so no gap to fix right now. Your next step: ${nextStep}`);
+      return done();
     }
     // Gap found -> TEACH, then RETEST in the same turn.
     s.gap = c.id;
     s.before = false;
     s.stage = "RETEST";
-    await fx.fact(c.id, "gap", "demonstrated", `Missed: ${c.diagnose.prompt} (answered "${msg}")`);
-    replies.push(`Not quite, and that's useful. I found the gap: ${c.name}. ${c.diagnose.explain}`);
-    replies.push(`Here's the one-minute version. ${c.lesson}`);
-    replies.push(`Let's check it stuck. ${c.retest.prompt}`);
-    return { state: s, replies };
+    s.misconception = ev && ev.misconception !== "none" ? ev.misconception : undefined;
+    await fx.fact(c.id, "gap", "demonstrated", `Missed: ${asked.prompt} (answered "${msg.slice(0, 120)}")${s.misconception ? `. Misconception: ${s.misconception}` : ""}`);
+    if (ev && (!ev.lesson || !ev.retest)) aiFailed = true;
+    s.asked = ev?.retest ? aiQ(c, "retest", ev.retest) : configQ(c, "retest");
+    replies.push(ev ? `${ev.feedback} I found the gap: ${c.name}.` : `Not quite, and that's useful. I found the gap: ${c.name}. ${c.diagnose.explain}`);
+    replies.push(ev?.lesson ?? `Here's the one-minute version. ${c.lesson}`);
+    replies.push(`Let's check it stuck. ${s.asked.prompt}`);
+    return done();
   }
 
-  // RETEST
-  const ok = grade(c.retest, msg);
-  s.after = ok;
+  // ---- RETEST
+  s.after = correct;
   s.stage = "DONE";
-  await fx.attempt({ topic: s.topicId, concept: c.id, phase: "retest", questionId: c.retest.id, question: c.retest.prompt, answer: msg, correct: ok });
-  if (ok) {
-    await fx.fact(c.id, "demonstrated", "demonstrated", `Missed it before the lesson, got it after: "${msg}" to ${c.retest.prompt}`);
+  s.asked = undefined;
+  if (correct) {
+    await fx.fact(c.id, "demonstrated", "demonstrated", `Missed it before the lesson, got it after: "${msg.slice(0, 120)}" to ${asked.prompt}`);
   }
-  const nextStep = ok
-    ? c.next_step
-    : `Re-read the lesson on ${c.name} on your profile page, then try one more question. Or book a human mentor review and someone will walk you through it.`;
+  if (ev && !ev.next_step) aiFailed = true;
+  const nextStep =
+    ev?.next_step ??
+    (correct ? c.next_step : `Re-read the lesson on ${c.name} on your profile page, then try one more question. Or book a human mentor review and someone will walk you through it.`);
   await fx.outcome({
     topic: s.topicId,
     gapConcept: c.id,
     beforeCorrect: false,
-    afterCorrect: ok,
+    afterCorrect: correct,
     nextStep,
-    summary: `Gap: ${c.name}. Before: wrong. After lesson: ${ok ? "right" : "still wrong"}.`,
+    summary: `Gap: ${c.name}. Before: wrong. After lesson: ${correct ? "right" : "still wrong"}.${s.misconception ? ` Misconception: ${s.misconception}` : ""}`,
   });
-  replies.push(ok ? `Yes! ${c.retest.explain} Before the lesson you missed this, now you've got it.` : `Not yet. ${c.retest.explain} That's okay, this one takes a couple of passes.`);
+  if (ev) replies.push(correct ? `${ev.feedback} Before the lesson you missed this, now you've got it.` : ev.feedback);
+  else replies.push(correct ? `Yes! ${c.retest.explain} Before the lesson you missed this, now you've got it.` : `Not yet. ${c.retest.explain} That's okay, this one takes a couple of passes.`);
   replies.push(`I've saved this to your profile. Your next step: ${nextStep}`);
   replies.push(`Type "again" to find the next thing to work on.`);
-  return { state: s, replies };
+  return done();
 }

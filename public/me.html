@@ -58,14 +58,14 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=t=>new Date(t).toLocaleString();
 
-function add(role,text){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');d.textContent=text;$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
+function add(role,text,src){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');d.textContent=text;if(role!=='l'&&src==='fallback'){const b=document.createElement('div');b.className='small muted';b.textContent='offline mode: standard lesson, not AI-personalised';d.appendChild(b);}$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
 async function chat(message){
   const r=await fetch('/api/chat',{method:'POST',headers:H,body:JSON.stringify({message})});
   const j=await r.json(); if(!r.ok){add('c',j.error||'Error');return;}
-  j.replies.forEach(t=>add('c',t)); if(j.stage==='DONE'||message) loadProfile();
+  j.replies.forEach((t,i)=>add('c',t,i===j.replies.length-1?j.source:null)); if(j.stage==='DONE'||message) loadProfile();
 }
-$('cf').addEventListener('submit',e=>{e.preventDefault();const v=$('m').value.trim();if(!v)return;add('l',v);$('m').value='';chat(v);});
-$('reset').onclick=async()=>{$('msgs').innerHTML='';const r=await fetch('/api/chat/reset',{method:'POST',headers:H});const j=await r.json();j.replies.forEach(t=>add('c',t));};
+$('cf').addEventListener('submit',e=>{e.preventDefault();const v=$('m').value.trim();if(!v)return;add('l',v);$('m').value='';$('m').disabled=true;chat(v).finally(()=>{$('m').disabled=false;$('m').focus();});});
+$('reset').onclick=async()=>{$('msgs').innerHTML='';const r=await fetch('/api/chat/reset',{method:'POST',headers:H});const j=await r.json();j.replies.forEach((t,i)=>add('c',t,i===j.replies.length-1?j.source:null));};
 
 async function loadProfile(){
   const r=await fetch('/api/me',{headers:H}); if(r.status===401){try{localStorage.removeItem('cm_token')}catch{};location.href='/#join';return;}

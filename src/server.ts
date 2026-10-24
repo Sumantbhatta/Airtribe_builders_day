@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express, { NextFunction, Request, Response } from "express";
 import { initDb, q, one, logEvent, dbKind } from "./db.js";
+import { llmStatus } from "./llm.js";
 import { getConcept, grade, prioritize, defaultTopic } from "./engine.js";
 import {
   Learner,
@@ -32,7 +33,10 @@ const safeEq = (a: string, b: string) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 
-app.get("/health", (_req, res) => res.json({ ok: true, db: dbKind, at: new Date().toISOString() }));
+app.get("/health", (_req, res) => {
+  const ai = llmStatus();
+  res.json({ ok: true, db: dbKind, ai: { configured: ai.configured, model: ai.model, last_ok_at: ai.lastOkAt, failures: ai.failures }, at: new Date().toISOString() });
+});
 
 app.get("/api/config", (_req, res) =>
   res.json({
