@@ -81,8 +81,12 @@ const speakable = (t: string) => t.replace(/[*`#_]/g, "");
 export async function chatCompletions(req: Request, res: Response) {
   const secret = process.env.VOICE_LLM_SECRET || "";
   const auth = String(req.header("authorization") ?? "");
-  const got = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const okAuth = !!secret && got.length === secret.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(secret));
+  // OpenAI-style clients send "Authorization: Bearer"; accept api-key headers too.
+  const candidates = [auth.startsWith("Bearer ") ? auth.slice(7) : "", String(req.header("api-key") ?? ""), String(req.header("x-api-key") ?? "")];
+  const okAuth = !!secret && candidates.some((got) => got.length === secret.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(secret)));
+  const t0 = Date.now();
+  const present = ["authorization", "api-key", "x-api-key"].filter((h) => req.header(h)).join(",") || "none";
+  console.log(`[voice-llm] ${new Date().toISOString()} request auth_ok=${okAuth} headers=${present} stream=${req.body?.stream} msgs=${Array.isArray(req.body?.messages) ? req.body.messages.length : 0}`);
   const body = req.body ?? {};
   const extra = body.elevenlabs_extra_body ?? {};
   await logEvent("voice.llm_request", {
@@ -141,5 +145,6 @@ export async function chatCompletions(req: Request, res: Response) {
     console.error("voice turn failed:", e?.message ?? e);
     send("Sorry, I lost my train of thought there. Could you say that again?");
   }
+  console.log(`[voice-llm] done learner=${learner.id} in ${Date.now() - t0}ms`);
   finish();
 }
