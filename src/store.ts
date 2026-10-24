@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import { q, one, logEvent } from "./db.js";
-import { Effects, EngineState, LearnerView, TurnSource, getConcept, start, step, topics } from "./engine.js";
-import { Tutor, geminiTutor } from "./tutor.js";
-
-/** The live AI tutor when GEMINI_API_KEY is set; otherwise the engine runs on config content. */
-export const activeTutor = (): Tutor | undefined => (process.env.GEMINI_API_KEY ? geminiTutor : undefined);
+import { Effects, LearnerView, getConcept, topics } from "./engine.js";
 
 export interface Learner {
   id: number;
@@ -107,55 +103,6 @@ export function effectsFor(learner: Learner, sessionId: number | null, gradedBy 
       await logEvent("learning.outcome", { gap: o.gapConcept, before: o.beforeCorrect, after: o.afterCorrect }, learner.id, sessionId);
     },
   };
-}
-
-interface SessionRow {
-  id: number;
-  stage: string;
-  state: EngineState;
-  transcript: { role: string; text: string; at: string; source?: string }[];
-}
-
-async function appendTranscript(sessionId: number, entries: { role: string; text: string; source?: TurnSource }[]) {
-  const at = new Date().toISOString();
-  await q("update sessions set transcript = transcript || $1::jsonb, updated_at = now() where id = $2", [
-    JSON.stringify(entries.map((e) => ({ ...e, at }))),
-    sessionId,
-  ]);
-}
-
-/** Web/text chat turn. Opens a session if none is active for this learner+channel. */
-export async function chatTurn(
-  learner: Learner,
-  message: string | null,
-  channel = "web",
-  tutor: Tutor | undefined = activeTutor(),
-): Promise<{ sessionId: number; stage: string; replies: string[]; source: TurnSource }> {
-  let s = await one<SessionRow>(
-    "select id, stage, state, transcript from sessions where learner_id=$1 and channel=$2 and ended_at is null order by id desc limit 1",
-    [learner.id, channel],
-  );
-  if (!s) {
-    const view = await learnerView(learner);
-    const { state, replies, source } = await start(view, tutor);
-    s = (await one<SessionRow>(
-      "insert into sessions (learner_id, channel, stage, state, is_test) values ($1,$2,$3,$4,$5) returning id, stage, state, transcript",
-      [learner.id, channel, state.stage, JSON.stringify(state), learner.is_test],
-    ))!;
-    await logEvent("session.start", { channel }, learner.id, s.id);
-    await appendTranscript(s.id, replies.map((text) => ({ role: "companion", text, source })));
-    if (!message) return { sessionId: s.id, stage: state.stage, replies, source };
-  }
-  if (!message) {
-    // Resume: replay the last companion message so the UI isn't blank.
-    const last = s.transcript.filter((t) => t.role === "companion").slice(-2);
-    return { sessionId: s.id, stage: s.stage, replies: last.map((t) => t.text), source: (last[last.length - 1]?.source as TurnSource) ?? "fallback" };
-  }
-  const { state, replies, source } = await step(s.state, message, effectsFor(learner, s.id), tutor, learner.name);
-  await q("update sessions set stage=$1, state=$2, updated_at=now() where id=$3", [state.stage, JSON.stringify(state), s.id]);
-  await appendTranscript(s.id, [{ role: "learner", text: message }, ...replies.map((text) => ({ role: "companion", text, source }))]);
-  if (tutor && source === "fallback") await logEvent("ai.fallback", { stage: state.stage }, learner.id, s.id);
-  return { sessionId: s.id, stage: state.stage, replies, source };
 }
 
 export async function endSession(learnerId: number, channel = "web") {

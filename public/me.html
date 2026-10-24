@@ -58,11 +58,23 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=t=>new Date(t).toLocaleString();
 
-function add(role,text,src){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');d.textContent=text;if(role!=='l'&&src==='fallback'){const b=document.createElement('div');b.className='small muted';b.textContent='offline mode: standard lesson, not AI-personalised';d.appendChild(b);}$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
+function fmtMsg(t){return esc(t).replace(/`([^`\n]+)`/g,'<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>');}
+function add(role,text,src){const d=document.createElement('div');d.className='msg '+(role==='l'?'l':'c');if(role==='l')d.textContent=text;else d.innerHTML=fmtMsg(text);if(role!=='l'&&src==='fallback'){const b=document.createElement('div');b.className='small muted';b.textContent='offline mode: standard lesson, not AI-personalised';d.appendChild(b);}$('msgs').appendChild(d);$('msgs').scrollTop=1e9;}
 async function chat(message){
-  const r=await fetch('/api/chat',{method:'POST',headers:H,body:JSON.stringify({message})});
-  const j=await r.json(); if(!r.ok){add('c',j.error||'Error');return;}
-  j.replies.forEach((t,i)=>add('c',t,i===j.replies.length-1?j.source:null)); if(j.stage==='DONE'||message) loadProfile();
+  if(!message){
+    const r=await fetch('/api/chat',{method:'POST',headers:H,body:JSON.stringify({message})});
+    const j=await r.json(); if(!r.ok){add('c',j.error||'Error');return;}
+    j.replies.forEach((t,i)=>add('c',t,i===j.replies.length-1?j.source:null)); return;
+  }
+  const r=await fetch('/api/chat/stream',{method:'POST',headers:H,body:JSON.stringify({message})});
+  if(!r.ok||!r.body){let e='Error';try{e=(await r.json()).error||e}catch{};add('c',e);return;}
+  const d=document.createElement('div');d.className='msg c';d.textContent='…';$('msgs').appendChild(d);
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='',text='';
+  for(;;){const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
+    while((i=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+2);if(!line.startsWith('data:'))continue;const ev=JSON.parse(line.slice(5));
+      if(ev.type==='delta'){text+=ev.text;d.innerHTML=fmtMsg(text);$('msgs').scrollTop=1e9;}
+      else if(ev.type==='done'){if(ev.source==='ai'){d.innerHTML=fmtMsg(ev.replies.join('\n'));}else{d.remove();ev.replies.forEach((t,k)=>add('c',t,k===ev.replies.length-1?ev.source:null));}loadProfile();}
+      else if(ev.type==='error'){d.textContent=ev.error;}}}
 }
 $('cf').addEventListener('submit',e=>{e.preventDefault();const v=$('m').value.trim();if(!v)return;add('l',v);$('m').value='';$('m').disabled=true;chat(v).finally(()=>{$('m').disabled=false;$('m').focus();});});
 $('reset').onclick=async()=>{$('msgs').innerHTML='';const r=await fetch('/api/chat/reset',{method:'POST',headers:H});const j=await r.json();j.replies.forEach((t,i)=>add('c',t,i===j.replies.length-1?j.source:null));};

@@ -17,7 +17,7 @@ check(s.status === 200 && s.json.token, "signup returns token");
 const H = { "x-learner-token": s.json.token };
 const say = async (m: string | null) => (await post("/api/chat", { message: m }, H)).json;
 let r = await say(null);
-check(r.stage === "DISCOVER", "session opens in DISCOVER");
+check(r.stage === "CHAT" || r.stage === "DISCOVER", `session opens (${r.stage})`);
 await say("Java, beginner level");
 await say("to get my first developer job");
 r = await say("I get confused by Strings and comparing them");

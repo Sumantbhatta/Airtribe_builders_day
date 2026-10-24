@@ -3,11 +3,11 @@ import crypto from "node:crypto";
 import path from "node:path";
 import express, { NextFunction, Request, Response } from "express";
 import { initDb, q, one, logEvent, dbKind } from "./db.js";
-import { llmStatus } from "./llm.js";
+import { aiConfigured, aiStatus, probe } from "./ai/index.js";
+import { loadContext, mentorTurn } from "./mentor.js";
 import { getConcept, grade, prioritize, defaultTopic } from "./engine.js";
 import {
   Learner,
-  chatTurn,
   createLearner,
   effectsFor,
   endSession,
@@ -34,9 +34,13 @@ const safeEq = (a: string, b: string) => {
 };
 
 app.get("/health", (_req, res) => {
-  const ai = llmStatus();
-  res.json({ ok: true, db: dbKind, ai: { configured: ai.configured, model: ai.model, last_ok_at: ai.lastOkAt, failures: ai.failures }, at: new Date().toISOString() });
+  const ai = aiStatus();
+  const active = ai.providers.find((p) => p.configured && p.preferred_models.length);
+  res.json({ ok: true, db: dbKind, ai: { configured: ai.configured, provider: active?.name ?? null, model: active?.preferred_models[0] ?? null }, at: new Date().toISOString() });
 });
+
+// Provider/model health for operators. Never includes keys.
+app.get("/api/ai/status", (_req, res) => res.json(aiStatus()));
 
 app.get("/api/config", (_req, res) =>
   res.json({
@@ -136,7 +140,29 @@ app.post(
     const l = await requireLearner(req, res);
     if (!l) return;
     const msg = req.body.message == null ? null : String(req.body.message).slice(0, 1000);
-    res.json(await chatTurn(l, msg && msg.trim() ? msg : null));
+    res.json(await mentorTurn(l, msg && msg.trim() ? msg : null));
+  }),
+);
+
+// Same turn as /api/chat, streamed as server-sent events:
+// {"type":"delta","text"} while the AI writes, then {"type":"done", ...TurnResult}.
+app.post(
+  "/api/chat/stream",
+  wrap(async (req, res) => {
+    const l = await requireLearner(req, res);
+    if (!l) return;
+    const msg = String(req.body.message ?? "").slice(0, 1000).trim();
+    if (!msg) return res.status(400).json({ error: "message required" });
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
+    const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+    try {
+      const r = await mentorTurn(l, msg, "web", (text) => send({ type: "delta", text }));
+      send({ type: "done", ...r });
+    } catch (e: any) {
+      console.error("stream turn failed:", e?.message ?? e);
+      send({ type: "error", error: "Something went wrong. Please try again." });
+    }
+    res.end();
   }),
 );
 
@@ -146,7 +172,7 @@ app.post(
     const l = await requireLearner(req, res);
     if (!l) return;
     await endSession(l.id, "web");
-    res.json(await chatTurn(l, null));
+    res.json(await mentorTurn(l, null));
   }),
 );
 
@@ -247,6 +273,7 @@ app.post(
           next_step: c.next_step,
         };
       });
+    const ctx = await loadContext(learner);
     await logEvent("tool.get_profile", { is_new: isNew }, learner.id, sessionId);
     res.json({
       learner_name: learner.name === "Caller" ? null : learner.name,
@@ -255,6 +282,10 @@ app.post(
       motivation: learner.motivation,
       struggle: learner.struggle,
       known_facts: view.facts,
+      misconceptions: ctx.facts.filter((f) => f.status === "gap").map((f) => ({ concept: f.concept, evidence: f.evidence })),
+      recent_outcomes: ctx.outcomes,
+      // Same memory as web chat: the last messages from any channel, oldest first.
+      recent_conversation: ctx.history.slice(-10).map((m) => ({ role: m.role === "user" ? "learner" : "mentor", text: m.text.slice(0, 400) })),
       topic: topic.title,
       plan,
       all_clear_next_step: topic.all_clear_next_step,
@@ -496,7 +527,12 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 const port = Number(process.env.PORT || 3000);
 await initDb();
-app.listen(port, () => console.log(`listening on :${port} (db=${dbKind})`));
+app.listen(port, () => console.log(`listening on :${port} (db=${dbKind}, ai=${aiConfigured() ? "on" : "off"})`));
+if (aiConfigured() && process.env.AI_PROBE !== "0") {
+  // One startup probe to rank models by real latency. Free tiers have small daily
+  // per-model quotas, so we don't re-probe; runtime failover handles later outages.
+  probe(3).catch((e) => console.error("ai probe failed", e?.message));
+}
 
 // Free Render instances sleep after ~15 min without inbound traffic. Pinging our own
 // public URL goes through Render's router, so it counts as inbound and keeps us warm.

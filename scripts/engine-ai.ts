@@ -1,6 +1,8 @@
 // Engine tests with fake AI tutors (no network). Run: npx tsx scripts/engine-ai.ts
 import { Attempt, Effects, EngineState, Outcome, looseMatch, start, step } from "../src/engine.js";
-import { pickModel } from "../src/llm.js";
+import { rankGemini } from "../src/ai/gemini.js";
+
+const pickModel = (names: string[], pref?: string) => rankGemini(names.map((n) => n.replace(/^models\//, "")), pref ? [pref] : [])[0] ?? null;
 import type { Tutor } from "../src/tutor.js";
 
 let failures = 0;

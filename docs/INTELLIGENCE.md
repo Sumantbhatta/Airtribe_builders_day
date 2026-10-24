@@ -1,30 +1,46 @@
 # Intelligence layer
 
-## How a turn works
-`src/engine.ts` runs DISCOVER → DIAGNOSE → TEACH → RETEST → UPDATE PROFILE → NEXT STEP.
-The curriculum (concepts, reference questions, answers, lessons) lives in `topics/*.json`.
+## Conversational mentor (src/mentor.ts)
+Web chat (`/api/chat`, `/api/chat/stream`) is a free-form conversation with a grounded LLM mentor.
+Each turn:
+1. **Context from Postgres, not model memory:** profile (goal, motivation, struggle), skills and gaps with
+   evidence and learner corrections, recent outcomes, misconceptions this session, the waiting practice
+   question, and the last 24 transcript messages across sessions and channels.
+2. **One streamed LLM call.** The system prompt makes the mentor conversational, mirror English, Hindi
+   or Hinglish, re-explain differently on "I don't get it", offer practice only when it helps (no forced
+   MCQ), stay consistent with the verified reference notes in `topics/*.json`, and admit uncertainty
+   instead of inventing APIs or outputs.
+3. **Evidence.** The reply ends with a hidden `###EVIDENCE###` JSON block that is stripped before the
+   learner sees it. It carries: was the waiting question answered and was it correct, the misconception,
+   any new practice question with its answer key, explicit confusions, and explicitly stated profile
+   details. If the block is missing or malformed, a separate extraction call runs, but only when evidence
+   is possible (a waiting question, or the reply asked one).
+4. **Persistence:** attempts (`graded_by='ai'`), profile facts (demonstrated vs inferred, with evidence),
+   before/after outcomes when a missed concept is retested, profile fields, transcript entries labelled
+   with `source` and `model`, and `events`.
 
-When `GEMINI_API_KEY` is set, `src/tutor.ts` makes one Gemini call per learner turn, grounded in the
-concept's reference facts:
+If every provider fails, the turn runs the deterministic engine (`src/engine.ts`) and is labelled
+`fallback`, with an "offline" note shown to the learner.
 
-| Step | AI does | Fallback (no key / call failed / invalid output) |
-|---|---|---|
-| Discover | Personalised follow-up question in the learner's language | Fixed prompt from config |
-| Diagnose | Orders concepts from what the learner said; writes the first question | Keyword ranking; config question |
-| Grade | Judges meaning in any language; names the misconception | Regex grader (config questions) or answer-key match (AI questions) |
-| Teach | ≤90-word lesson with an analogy tied to the learner's goal | Config lesson |
-| Retest | Fresh question on the same concept, with answer key | Config retest question |
-| Next step | Personalised practice task | Config next step |
+## Providers (src/ai/)
+- `gemini.ts` (Generative Language REST) and `groq.ts` (OpenAI-compatible) keep their formats separate.
+  Keys go only in request headers.
+- `index.ts` routes across `AI_PROVIDERS` (default `gemini,groq`) and their models. Candidates come
+  from each provider's live model list, ordered by a one-time startup latency probe. 404/429/503/timeout
+  cool a model down; a **daily-quota** 429 cools it for 6 h. Streaming has a 10 s first-token watchdog
+  and a 25 s budget per turn.
+- `GET /api/ai/status` reports provider, model health and latency, never keys. `/health` shows the
+  active provider and model.
 
-Every chat turn is labelled `source: "ai" | "fallback"` in the API response and the session transcript.
-The learner UI shows "offline mode" on fallback turns. `attempts.graded_by` records `ai`, `engine` or
-`engine_fallback`. `/health` reports whether AI is configured, the selected model, and the failure count.
+Measured 24 Oct 2026 on the free Gemini tier: quota is **20 requests/day per model per project**;
+`gemini-3.8-flash` returned 503, `gemini-3.7-flash` and `gemini-flash-latest` took 40–50 s,
+`gemini-2.5-flash` returned 404 for new users, `gemini-pro-latest` returned 429. Working models
+streamed first tokens in about 3.8–7.2 s.
 
-The model is chosen at runtime from Gemini's `ListModels` response: the newest stable `gemini-*-flash`
-text model, or `GEMINI_MODEL` if that exact ID is listed. The key goes only in the `x-goog-api-key` header.
-
-Voice and WhatsApp use the ElevenLabs agent's own LLM. They read the same curriculum through
-`/tools/get_profile` and write through `/tools/record_attempt` and `/tools/save_outcome`.
+## Voice
+The ElevenLabs agent uses its own LLM but the same memory: `/tools/get_profile` returns the learner's
+facts, misconceptions, outcomes, the reference plan, and the last 10 messages from any channel.
+`record_attempt` and `save_outcome` write to the same tables.
 
 ## LearningMAP: evaluated, not integrated (24 Oct 2026)
 Source checked: github.com/ai-for-edu/LearningMAP @ 68f6e38 (Apache-2.0).

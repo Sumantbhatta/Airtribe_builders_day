@@ -44,3 +44,4 @@ th{position:sticky;top:0;background:var(--card)}
 .stat{font-size:30px;font-weight:700}
 .tag-test{color:var(--muted);font-style:italic}
 details summary{cursor:pointer;font-weight:600}
+.msg code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:color-mix(in srgb,var(--fg) 10%,transparent);padding:0 4px;border-radius:4px}
