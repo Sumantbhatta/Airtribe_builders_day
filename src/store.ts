@@ -157,12 +157,13 @@ export async function endSession(learnerId: number, channel = "web") {
 }
 
 export async function profilePayload(l: Learner) {
-  const [facts, outcomes, attempts, payments, feedback] = await Promise.all([
+  const [facts, outcomes, attempts, payments, feedback, inbox] = await Promise.all([
     q("select id, concept, status, kind, evidence, source, learner_note, updated_at from profile_facts where learner_id=$1 order by updated_at desc", [l.id]),
     q("select id, channel, gap_concept, before_correct, after_correct, next_step, summary, created_at from outcomes where learner_id=$1 order by id desc limit 20", [l.id]),
     q("select concept, phase, question, answer, correct, created_at from attempts where learner_id=$1 order by id desc limit 30", [l.id]),
     q("select id, product, amount_paise, status, created_at from payments where learner_id=$1 order by id desc", [l.id]),
     q("select final_text, decided_at from approvals where learner_id=$1 and kind='mentor_review' and status in ('approved','sent') order by id desc", [l.id]),
+    q("select final_text as text, decided_at as at from approvals where learner_id=$1 and kind='stalled_nudge' and status='sent' order by id desc limit 5", [l.id]),
   ]);
   const named = (rows: any[]) =>
     rows.map((r) => {
@@ -177,5 +178,6 @@ export async function profilePayload(l: Learner) {
     attempts,
     payments,
     mentor_feedback: feedback,
+    inbox,
   };
 }

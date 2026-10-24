@@ -14,6 +14,7 @@
   <p class="muted small">All times are server timestamps (shown in your local timezone, ISO in tooltip). Rows tagged <span class="tag-test">TEST</span> are internal runs and are excluded from every count.</p>
   <div class="grid" id="stats" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"></div>
   <p><button class="btn secondary" id="refresh">Refresh</button> <label class="check" style="display:inline-flex"><input type="checkbox" id="auto" checked> auto-refresh 15s</label></p>
+  <p><button class="btn secondary" id="runagent">Run stalled-learner agent now</button> <span id="agentmsg" class="muted small"></span></p>
   <div id="sections"></div>
 </div>
 </div>
@@ -41,7 +42,7 @@ async function load(){
     table('Sessions / calls',d.sessions,['id','learner_id','name','channel','stage','external_id','turns','started_at','ended_at'],r=>`<button class="small" data-sess="${r.id}">transcript</button>`)+
     table('Learning outcomes',d.outcomes,['id','learner_id','name','channel','gap_concept','before_correct','after_correct','next_step','created_at'])+
     table('Payments',d.payments,['id','learner_id','name','product','amount_paise','status','merchant_order_ref','provider_order_id','created_at','updated_at'])+
-    table('Approvals (human in the loop)',d.approvals,['id','agent_run_id','learner_id','name','kind','status','draft','final_text','decided_by','decided_at','created_at'])+
+    table('Approvals (human in the loop)',d.approvals,['id','agent_run_id','learner_id','name','kind','status','draft','final_text','decided_by','decided_at','created_at'],r=>r.status==='pending'?`<textarea data-edit="${r.id}" rows="3" style="min-width:220px">${esc(r.draft)}</textarea><br><input data-who="${r.id}" placeholder="your name" style="width:120px"> <button class="small" data-dec="approve" data-id="${r.id}">Approve &amp; send</button> <button class="small" data-dec="reject" data-id="${r.id}">Reject</button>`:'')+
     table('Agent runs',d.agentRuns,['id','agent','trigger','status','input','output','created_at','finished_at'])+
     table('Event log (append-only)',d.events,['id','type','learner_id','session_id','payload','created_at'])+
     `<div class="card" style="margin-top:16px" id="tx" hidden></div>`;
@@ -49,9 +50,12 @@ async function load(){
 }
 $('login').addEventListener('submit',async e=>{e.preventDefault();auth='Basic '+btoa('admin:'+$('pw').value);sessionStorage.setItem('cm_admin',auth);if(!await load())$('err').textContent='Wrong password';});
 $('refresh').onclick=load;
+$('runagent').onclick=async()=>{const r=await fetch('/api/admin/agent/stalled-followup/run',{method:'POST',headers:{authorization:auth}});const j=await r.json();$('agentmsg').textContent=`Run #${j.agent_run_id}: queued ${j.queued} draft(s) for approval`;load();};
 setInterval(()=>{if($('auto').checked&&!$('app').hidden)load()},15000);
 document.addEventListener('click',async e=>{
   const t=e.target.closest('[data-test]'); if(t){await fetch('/api/admin/learners/'+t.dataset.test+'/test',{method:'POST',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify({is_test:t.dataset.v==='1'})});load();}
+  const dcs=e.target.closest('[data-dec]'); if(dcs){const id=dcs.dataset.id;const whoEl=document.querySelector(`[data-who="${id}"]`);if(!whoEl.value.trim()){whoEl.focus();whoEl.placeholder='name required';return;}
+    await fetch('/api/admin/approvals/'+id+'/decide',{method:'POST',headers:{authorization:auth,'content-type':'application/json'},body:JSON.stringify({decision:dcs.dataset.dec,decided_by:whoEl.value.trim(),final_text:document.querySelector(`[data-edit="${id}"]`).value})});load();}
   const s=e.target.closest('[data-sess]'); if(s){const r=await fetch('/api/admin/sessions/'+s.dataset.sess,{headers:{authorization:auth}});const j=await r.json();const tx=$('tx');tx.hidden=false;
     tx.innerHTML=`<h2>Transcript · session ${j.id} · ${esc(j.channel)}</h2>`+(j.transcript||[]).map(m=>`<div class="small"><span class="muted">${ts(m.at)}</span> <b>${esc(m.role)}:</b> ${esc(m.text)}</div>`).join('');tx.scrollIntoView();}
 });

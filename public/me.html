@@ -4,6 +4,7 @@
 <body><div class="wrap">
 <header class="top"><a class="brand" href="/" style="color:inherit;text-decoration:none">CallMentor</a><span class="muted small" id="hello"></span></header>
 
+<div class="card" id="inbox" hidden style="margin-bottom:16px;border-color:var(--accent)"></div>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start">
   <div class="card chat">
     <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Talk it through</h2><button class="btn secondary small" id="reset" style="padding:6px 10px">New session</button></div>
@@ -81,6 +82,7 @@ async function loadProfile(){
   $('outcomes').innerHTML=p.outcomes.length?p.outcomes.map(o=>`<div class="fact"><b>${o.gap_concept?esc(o.concept_name):'No gap found'}</b> <span class="muted small">${esc(o.channel||'')} · ${fmt(o.created_at)}</span>
     ${o.gap_concept?`<div>Before lesson: ❌ → After: ${o.after_correct?'✅':'❌'}</div>`:''}<div class="small"><b>Next step:</b> ${esc(o.next_step)}</div></div>`).join(''):'No sessions finished yet.';
   $('mentor-feedback').innerHTML=p.mentor_feedback.map(m=>`<div class="fact"><b>Mentor feedback</b> <span class="muted small">${fmt(m.decided_at)}</span><div style="white-space:pre-wrap">${esc(m.final_text)}</div></div>`).join('');
+  if(p.inbox&&p.inbox.length){$('inbox').hidden=false;$('inbox').innerHTML='<h2>📬 A note from your mentor team</h2>'+p.inbox.map(m=>`<p>${esc(m.text)} <span class="muted small">${fmt(m.at)}</span></p>`).join('');}
   $('paylist').innerHTML=p.payments.map(x=>`${esc(x.product)} · ₹${x.amount_paise/100} · <b>${esc(x.status)}</b> · ${fmt(x.created_at)}`).join('<br>');
 }
 document.addEventListener('click',async e=>{const a=e.target.closest('a[data-f]');if(!a)return;e.preventDefault();

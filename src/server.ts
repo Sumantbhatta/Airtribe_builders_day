@@ -16,6 +16,7 @@ import {
   normalizePhone,
   profilePayload,
 } from "./store.js";
+import { decide, finishRun, proposeNudge, stalledLearners, startRun } from "./agent.js";
 import { createCheckout, paymentsEnabled, syncPayment, verifyCallbackSignature } from "./payments.js";
 
 const app = express();
@@ -308,6 +309,91 @@ app.post(
   }),
 );
 
+// ---------- Agent API (called by the AgenticOrg agent) ----------
+
+function requireAgent(req: Request, res: Response, next: NextFunction) {
+  const secret = process.env.AGENT_SECRET;
+  const h = req.header("authorization") ?? "";
+  const got = h.startsWith("Bearer ") ? h.slice(7) : String(req.header("x-agent-secret") ?? "");
+  if (!secret || !safeEq(got, secret)) {
+    logEvent("agent.unauthorized", { path: req.path }).catch(() => {});
+    return res.status(401).json({ error: "unauthorized" });
+  }
+  next();
+}
+
+app.get(
+  "/api/agent/stalled-learners",
+  requireAgent,
+  wrap(async (_req, res) => {
+    const learners = await stalledLearners();
+    await logEvent("agent.read_stalled", { count: learners.length });
+    res.json({ count: learners.length, learners });
+  }),
+);
+
+// One call = one agent run: find stalled learners and queue a draft nudge for each. Nothing is sent.
+app.post(
+  "/api/agent/stalled-followup/run",
+  requireAgent,
+  wrap(async (req, res) => {
+    const trigger = String(req.body.trigger ?? "agenticorg").slice(0, 60);
+    const runId = await startRun("stalled_learner_followup", trigger, { source: req.body.source ?? "agenticorg", external_run_id: req.body.external_run_id ?? null });
+    try {
+      const learners = await stalledLearners();
+      const drafts: Record<string, string> = req.body.drafts ?? {};
+      const queued = [];
+      for (const l of learners) {
+        const draft = drafts[String(l.learner_id)] || l.suggested_draft;
+        queued.push({ learner_id: l.learner_id, first_name: l.first_name, gap: l.gap_name, approval_id: await proposeNudge(runId, l.learner_id, draft), draft });
+      }
+      await finishRun(runId, "awaiting_approval", { stalled: learners.length, queued: queued.map((x) => x.approval_id) });
+      res.json({ agent_run_id: runId, stalled: learners.length, queued, note: "Drafts need human approval before anything is sent." });
+    } catch (e: any) {
+      await finishRun(runId, "error", { error: e?.message });
+      throw e;
+    }
+  }),
+);
+
+app.post(
+  "/api/agent/nudges",
+  requireAgent,
+  wrap(async (req, res) => {
+    const learnerId = Number(req.body.learner_id);
+    const draft = String(req.body.draft ?? "").trim();
+    if (!learnerId || !draft) return res.status(400).json({ error: "learner_id and draft required" });
+    const id = await proposeNudge(req.body.agent_run_id ? Number(req.body.agent_run_id) : null, learnerId, draft);
+    res.json({ approval_id: id, status: "pending" });
+  }),
+);
+
+app.get(
+  "/api/agent/approvals",
+  requireAgent,
+  wrap(async (req, res) => {
+    const status = String(req.query.status ?? "pending");
+    res.json(
+      await q(
+        "select a.id, a.learner_id, l.name, a.kind, a.status, a.draft, a.final_text, a.decided_by, a.decided_at, a.created_at from approvals a left join learners l on l.id=a.learner_id where a.status=$1 order by a.id desc limit 100",
+        [status],
+      ),
+    );
+  }),
+);
+
+// Called after a human approved/rejected inside AgenticOrg's HITL step.
+app.post(
+  "/api/agent/approvals/:id/decision",
+  requireAgent,
+  wrap(async (req, res) => {
+    const decision = req.body.decision === "reject" ? "reject" : req.body.decision === "approve" ? "approve" : null;
+    const by = String(req.body.decided_by ?? "").trim();
+    if (!decision || !by) return res.status(400).json({ error: "decision (approve|reject) and decided_by (the human) required" });
+    res.json(await decide(Number(req.params.id), decision, `${by.slice(0, 60)} via agenticorg`, req.body.final_text));
+  }),
+);
+
 // ---------- Admin / proof of life ----------
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
@@ -352,6 +438,28 @@ app.get(
   requireAdmin,
   wrap(async (req, res) => {
     res.json(await one("select * from sessions where id=$1", [Number(req.params.id)]));
+  }),
+);
+
+app.post(
+  "/api/admin/approvals/:id/decide",
+  requireAdmin,
+  wrap(async (req, res) => {
+    const decision = req.body.decision === "reject" ? "reject" : "approve";
+    res.json(await decide(Number(req.params.id), decision, String(req.body.decided_by || "admin").slice(0, 60), req.body.final_text));
+  }),
+);
+
+app.post(
+  "/api/admin/agent/stalled-followup/run",
+  requireAdmin,
+  wrap(async (_req, res) => {
+    const runId = await startRun("stalled_learner_followup", "admin_manual", {});
+    const learners = await stalledLearners();
+    const ids = [];
+    for (const l of learners) ids.push(await proposeNudge(runId, l.learner_id, l.suggested_draft));
+    await finishRun(runId, "awaiting_approval", { stalled: learners.length, queued: ids });
+    res.json({ agent_run_id: runId, queued: ids.length });
   }),
 );
 
