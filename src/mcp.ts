@@ -15,7 +15,14 @@ const TOOLS = [
     name: "list_stalled_learners",
     description:
       "List CallMentor learners who stopped a learning session before their retest (consented, real learners only). Returns learner_id, first name, the concept they were stuck on, where they stopped, and a suggested draft. Starts an agent run record.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        include_test_learners: { type: "boolean", description: "Internal test runs only: also return learners tagged as test." },
+        min_idle_minutes: { type: "integer", minimum: 0, maximum: 1440, description: "How long a session must be idle to count as stalled (default 10)." },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "get_learner_progress",
@@ -62,14 +69,17 @@ const toolError = (msg: string) => ({ content: [{ type: "text", text: msg }], is
 
 async function callTool(name: string, args: any) {
   if (name === "list_stalled_learners") {
-    const learners = await stalledLearners();
-    const runId = await startRun("agenticorg_nudge", "agenticorg_mcp", { tool: name });
+    const includeTest = args?.include_test_learners === true;
+    const minIdle = Number.isFinite(Number(args?.min_idle_minutes)) ? Math.max(0, Math.min(1440, Number(args.min_idle_minutes))) : undefined;
+    const learners = await stalledLearners({ includeTest, minIdleMinutes: minIdle });
+    const runId = await startRun("agenticorg_nudge", "agenticorg_mcp", { tool: name, include_test_learners: includeTest, min_idle_minutes: minIdle ?? null });
     await finishRun(runId, "listed", { learner_ids: learners.map((l) => l.learner_id), count: learners.length });
     return text({
       agent_run_id: runId,
       count: learners.length,
       learners: learners.map((l) => ({
         learner_id: l.learner_id,
+        is_test: l.is_test,
         first_name: l.first_name,
         stopped_at_stage: l.stopped_at_stage,
         last_active_at: l.last_active_at,
@@ -82,7 +92,7 @@ async function callTool(name: string, args: any) {
 
   if (name === "get_learner_progress") {
     const id = Number(args?.learner_id);
-    const l = await one<any>("select id, name, goal, motivation, struggle from learners where id=$1 and consent and not is_test", [id]);
+    const l = await one<any>("select id, name, goal, motivation, struggle, is_test from learners where id=$1 and consent", [id]);
     if (!l) return toolError("No consented learner with that id.");
     const [facts, outcomes, msgs] = await Promise.all([
       q<any>("select concept, status, kind, evidence from profile_facts where learner_id=$1 and status<>'removed' order by updated_at desc limit 8", [id]),
@@ -97,6 +107,7 @@ async function callTool(name: string, args: any) {
     const name = (c: string) => getConcept(defaultTopic().id, c)?.name ?? c;
     return text({
       learner_id: id,
+      is_test: l.is_test,
       first_name: String(l.name).split(" ")[0],
       goal: l.goal,
       motivation: l.motivation,
@@ -150,6 +161,8 @@ export async function mcpHandler(req: Request, res: Response) {
   const fail = (code: number, message: string) => res.json({ jsonrpc: "2.0", id: msg.id ?? null, error: { code, message } });
 
   await logEvent("mcp.request", { method: msg.method, tool: msg.params?.name ?? null, auth_via: auth.via });
+  // Visible in Render logs: proves the order of tool calls vs. human approval.
+  console.log(`[mcp] ${new Date().toISOString()} ${msg.method}${msg.params?.name ? ` ${msg.params.name} ${JSON.stringify(msg.params.arguments ?? {}).slice(0, 200)}` : ""} auth=${auth.via}`);
   switch (msg.method) {
     case "initialize":
       return reply({

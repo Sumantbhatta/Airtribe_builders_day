@@ -7,18 +7,19 @@ import { getConcept, defaultTopic } from "./engine.js";
 
 export const STALL_MINUTES = Number(process.env.STALL_MINUTES || 10);
 
-export async function stalledLearners() {
+/** Internal test runs may include is_test learners; they stay tagged and excluded from traction counts. */
+export async function stalledLearners(opts: { includeTest?: boolean; minIdleMinutes?: number } = {}) {
   const rows = await q<any>(
-    `select distinct on (l.id) l.id as learner_id, l.name, l.phone, l.goal, l.struggle, s.id as session_id, s.channel, s.stage,
+    `select distinct on (l.id) l.id as learner_id, l.is_test, l.name, l.phone, l.goal, l.struggle, s.id as session_id, s.channel, s.stage,
             s.state, s.updated_at as last_active_at
        from sessions s join learners l on l.id = s.learner_id
       where s.stage in ('DIAGNOSE','TEACH','RETEST')
         and s.updated_at < now() - ($1 || ' minutes')::interval
-        and not l.is_test and l.consent
+        and (not l.is_test or $2) and l.consent
         and not exists (select 1 from approvals a where a.learner_id = l.id and a.kind = 'stalled_nudge' and a.created_at > now() - interval '24 hours')
         and not exists (select 1 from outcomes o where o.learner_id = l.id and o.created_at > s.started_at)
       order by l.id, s.updated_at desc`,
-    [String(STALL_MINUTES)],
+    [String(opts.minIdleMinutes ?? STALL_MINUTES), !!opts.includeTest],
   );
   return rows.map((r) => {
     // Mentor sessions keep gap/current at the top level (pending.concept for a waiting
@@ -28,6 +29,7 @@ export async function stalledLearners() {
     const facts = gapId ? getConcept(defaultTopic().id, gapId) : undefined;
     return {
       learner_id: r.learner_id,
+      is_test: !!r.is_test,
       first_name: String(r.name).split(" ")[0],
       channel: r.channel,
       stopped_at_stage: r.stage,
