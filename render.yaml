@@ -21,6 +21,12 @@ services:
         sync: false
       - key: GROQ_API_KEY
         sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: VOICE_LLM_SECRET
+        sync: false
+      - key: ELEVENLABS_AGENT_ID
+        value: agent_9801m5pwp5pbfc8rztn85va4vcsy
       - key: PUBLIC_BASE_URL
         sync: false
       - key: VOICE_NUMBER

@@ -7,7 +7,8 @@
 <div class="card" id="inbox" hidden style="margin-bottom:16px;border-color:var(--accent)"></div>
 <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start">
   <div class="card chat">
-    <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0">Talk it through</h2><button class="btn secondary small" id="reset" style="padding:6px 10px">New session</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0">Talk it through</h2><span><button class="btn small" id="voice" hidden style="padding:6px 10px">🎙️ Talk to your mentor</button> <button class="btn secondary small" id="reset" style="padding:6px 10px">New session</button></span></div>
+    <div class="small muted" id="voicestatus" aria-live="polite"></div>
     <div class="msgs" id="msgs" aria-live="polite"></div>
     <form class="composer" id="cf"><input id="m" type="text" autocomplete="off" placeholder="Type your answer…" aria-label="Your message"><button class="btn" type="submit">Send</button></form>
   </div>
@@ -113,6 +114,25 @@ $('pay').onclick=async()=>{ $('payerr').textContent='';
   if(!r.ok||!j.redirect_url){$('payerr').textContent=j.error||'Payment could not start';return;} location.href=j.redirect_url; };
 const pq=new URLSearchParams(location.search).get('payment');
 if(pq){$('payerr').textContent=pq==='SUCCESS'?'':'Payment status: '+pq;if(pq==='SUCCESS'){$('paylist').insertAdjacentHTML('beforebegin','<p><b>✅ Payment received.</b> A mentor will review your session; feedback appears here.</p>');}history.replaceState(null,'','/me');}
+// ---- Voice: ElevenLabs agent whose brain is our mentor (same memory as this chat)
+let call=null;
+fetch('/api/config').then(r=>r.json()).then(c=>{if(c.voiceEnabled)$('voice').hidden=false;});
+$('voice').onclick=async()=>{
+  const btn=$('voice'),st=$('voicestatus');
+  if(call){btn.disabled=true;try{await call.endSession();}catch{};return;}
+  btn.disabled=true;st.textContent='Connecting… allow the microphone when asked.';
+  try{
+    const r=await fetch('/api/voice/session',{method:'POST',headers:H});const s=await r.json();
+    if(!r.ok)throw new Error(s.error||'Voice unavailable');
+    const {Conversation}=await import('https://cdn.jsdelivr.net/npm/@elevenlabs/client@1.27.0/+esm');
+    call=await Conversation.startSession({signedUrl:s.signedUrl,userId:s.userId,customLlmExtraBody:s.customLlmExtraBody,dynamicVariables:s.dynamicVariables,
+      onConnect:()=>{st.textContent='🟢 Live: just talk. English, Hindi or Hinglish.';btn.textContent='⏹ End call';btn.disabled=false;},
+      onDisconnect:()=>{call=null;st.textContent='Call ended. It\'s saved to your profile.';btn.textContent='🎙️ Talk to your mentor';btn.disabled=false;loadProfile();},
+      onModeChange:(m)=>{if(call)st.textContent=m.mode==='speaking'?'🔊 Mentor is speaking…':'🟢 Listening…';},
+      onMessage:(m)=>{if(m&&m.message)add(m.source==='user'?'l':'c',(m.source==='user'?'🎙️ ':'🔊 ')+m.message);},
+      onError:(e)=>{st.textContent='Voice error: '+(e&&e.message?e.message:e);}});
+  }catch(e){call=null;st.textContent=String(e.message||e);btn.textContent='🎙️ Talk to your mentor';btn.disabled=false;}
+};
 loadProfile(); chat(null);
 </script>
 </body></html>

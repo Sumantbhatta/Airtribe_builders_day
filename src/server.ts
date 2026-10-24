@@ -1,10 +1,15 @@
 import "dotenv/config";
+import dotenv from "dotenv";
 import crypto from "node:crypto";
 import path from "node:path";
 import express, { NextFunction, Request, Response } from "express";
 import { initDb, q, one, logEvent, dbKind } from "./db.js";
 import { aiConfigured, aiStatus, probe } from "./ai/index.js";
 import { loadContext, mentorTurn } from "./mentor.js";
+import { chatCompletions, voiceConfigured, voiceSession } from "./voice.js";
+
+// The ElevenLabs CLI stores ELEVENLABS_API_KEY in .env.local for local dev; Render sets it directly.
+dotenv.config({ path: ".env.local" });
 import { getConcept, grade, prioritize, defaultTopic } from "./engine.js";
 import {
   Learner,
@@ -47,6 +52,7 @@ app.get("/api/config", (_req, res) =>
     voiceNumber: process.env.VOICE_NUMBER || null,
     whatsappLink: process.env.WHATSAPP_LINK || null,
     paymentsEnabled: paymentsEnabled(),
+    voiceEnabled: voiceConfigured(),
     mentorPricePaise: 4900,
   }),
 );
@@ -175,6 +181,22 @@ app.post(
     res.json(await mentorTurn(l, null));
   }),
 );
+
+// ---------- Voice (ElevenLabs agent with our mentor as its custom LLM) ----------
+
+app.post(
+  "/api/voice/session",
+  wrap(async (req, res) => {
+    const l = await requireLearner(req, res);
+    if (!l) return;
+    if (!voiceConfigured()) return res.status(503).json({ error: "Voice isn't switched on yet." });
+    await endSession(l.id, "voice"); // each call gets its own session/transcript
+    res.json(await voiceSession(l));
+  }),
+);
+
+// ElevenLabs Custom LLM endpoint (OpenAI chat-completions compatible, streamed).
+app.post("/v1/chat/completions", wrap(chatCompletions));
 
 // ---------- Payments (Pine Labs hosted checkout) ----------
 
